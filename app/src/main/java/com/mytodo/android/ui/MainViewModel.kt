@@ -2,10 +2,13 @@ package com.mytodo.android.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.mytodo.android.data.RepeatMode
 import com.mytodo.android.data.TodayTodoData
 import com.mytodo.android.data.TodayTodoNode
 import com.mytodo.android.data.TodoRepository
+import com.mytodo.android.utils.LunarUtils
 import dagger.hilt.android.lifecycle.HiltViewModel
+import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import javax.inject.Inject
@@ -22,27 +25,72 @@ class MainViewModel @Inject constructor(
 ) : ViewModel() {
 
     private val pendingParentCompletion = MutableStateFlow<ParentCompletionRequest?>(null)
+    private val isAddSheetVisible = MutableStateFlow(false)
 
     val uiState: StateFlow<MainUiState> =
-        combine(todoRepository.observeToday(), pendingParentCompletion) { todayData, pendingRequest ->
-            todayData.toUiState(pendingRequest = pendingRequest)
+        combine(
+            todoRepository.observeToday(),
+            pendingParentCompletion,
+            isAddSheetVisible,
+        ) { todayData, pendingRequest, addSheetVisible ->
+            todayData.toUiState(
+                pendingRequest = pendingRequest,
+                isAddSheetVisible = addSheetVisible,
+            )
         }.stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000),
             initialValue = MainUiState(),
         )
 
+    fun showAddSheet() {
+        isAddSheetVisible.value = true
+    }
+
+    fun dismissAddSheet() {
+        isAddSheetVisible.value = false
+    }
+
+    fun submitTodo(input: AddTodoInput) {
+        val trimmedContent = input.content.trim()
+        if (trimmedContent.isEmpty()) {
+            return
+        }
+
+        val subtaskTitles = input.subtasks
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+        val intervalDays = input.intervalDays?.takeIf { it > 0 }
+        val weekdays = if (input.repeatMode == RepeatMode.WEEKLY) input.weekdays.sorted() else emptyList()
+        val specificDates = if (input.repeatMode == RepeatMode.SPECIFIC_DATES) input.specificDates.sorted() else emptyList()
+
+        viewModelScope.launch {
+            todoRepository.addTodo(
+                content = trimmedContent,
+                repeatMode = input.repeatMode,
+                weekdays = weekdays,
+                intervalDays = if (input.repeatMode == RepeatMode.INTERVAL_DAYS) intervalDays else null,
+                anchorDate = if (input.repeatMode == RepeatMode.INTERVAL_DAYS) input.anchorDate else null,
+                specificDates = specificDates,
+                subtasks = subtaskTitles,
+            )
+            isAddSheetVisible.value = false
+        }
+    }
+
     fun onTodoToggle(todoId: String) {
         viewModelScope.launch {
-            if (todoRepository.hasChildren(todoId)) {
-                val todayData = uiState.value.todayData
-                val node = todayData?.findNode(todoId)
-                if (node != null && !node.todo.completed) {
+            val todayData = uiState.value.todayData
+            val node = todayData?.findNode(todoId)
+
+            if (node != null && !node.todo.completed) {
+                val unfinishedCount = node.unfinishedDescendantCount()
+                if (unfinishedCount > 0) {
                     pendingParentCompletion.value =
                         ParentCompletionRequest(
                             todoId = node.todo.id,
                             title = node.todo.content,
-                            childCount = node.unfinishedDescendantCount(),
+                            childCount = unfinishedCount,
                         )
                     return@launch
                 }
@@ -70,9 +118,11 @@ data class MainUiState(
     val todayData: TodayTodoData? = null,
     val dateLabel: String = "",
     val secondaryDateLabel: String = "",
+    val lunarLabel: String = "",
     val progressLabel: String = "0/0",
     val progress: Float = 0f,
     val pendingParentCompletion: ParentCompletionRequest? = null,
+    val isAddSheetVisible: Boolean = false,
     val isEmpty: Boolean = true,
 )
 
@@ -82,40 +132,31 @@ data class ParentCompletionRequest(
     val childCount: Int,
 )
 
-private fun TodayTodoData.toUiState(pendingRequest: ParentCompletionRequest?): MainUiState =
+data class AddTodoInput(
+    val content: String,
+    val repeatMode: RepeatMode,
+    val weekdays: Set<Int> = emptySet(),
+    val intervalDays: Int? = null,
+    val anchorDate: LocalDate? = null,
+    val specificDates: List<LocalDate> = emptyList(),
+    val subtasks: List<String> = emptyList(),
+)
+
+private fun TodayTodoData.toUiState(
+    pendingRequest: ParentCompletionRequest?,
+    isAddSheetVisible: Boolean,
+): MainUiState =
     MainUiState(
         todayData = this,
         dateLabel = date.format(TITLE_DATE_FORMATTER),
         secondaryDateLabel = date.format(SECONDARY_DATE_FORMATTER),
+        lunarLabel = LunarUtils.getLunarInfo(date),
         progressLabel = "$completedCount/$totalCount",
         progress = progress,
         pendingParentCompletion = pendingRequest,
+        isAddSheetVisible = isAddSheetVisible,
         isEmpty = totalCount == 0,
     )
 
 private val TITLE_DATE_FORMATTER = DateTimeFormatter.ofPattern("M月d日", Locale.CHINA)
 private val SECONDARY_DATE_FORMATTER = DateTimeFormatter.ofPattern("EEEE", Locale.CHINA)
-
-private fun TodayTodoData.findNode(todoId: String): TodayTodoNode? {
-    fun search(nodes: List<TodayTodoNode>): TodayTodoNode? {
-        nodes.forEach { node ->
-            if (node.todo.id == todoId) {
-                return node
-            }
-
-            val childResult = search(node.children)
-            if (childResult != null) {
-                return childResult
-            }
-        }
-        return null
-    }
-
-    return search(tree)
-}
-
-private fun TodayTodoNode.unfinishedDescendantCount(): Int =
-    children.sumOf { child ->
-        val selfCount = if (child.todo.completed) 0 else 1
-        selfCount + child.unfinishedDescendantCount()
-    }

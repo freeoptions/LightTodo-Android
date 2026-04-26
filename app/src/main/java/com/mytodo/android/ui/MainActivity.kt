@@ -38,6 +38,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mytodo.android.R
 import com.mytodo.android.data.TodayTodoNode
+import com.mytodo.android.ui.components.AddTodoSheet
 import com.mytodo.android.ui.components.TodoList
 
 @Composable
@@ -51,7 +52,9 @@ fun MainRoute(
         onToggleTodo = viewModel::onTodoToggle,
         onConfirmParentCompletion = viewModel::confirmParentCompletion,
         onDismissParentCompletion = viewModel::dismissParentCompletion,
-        onAddClick = {},
+        onAddClick = viewModel::showAddSheet,
+        onDismissAddTodo = viewModel::dismissAddSheet,
+        onSubmitTodo = viewModel::submitTodo,
     )
 }
 
@@ -62,8 +65,10 @@ fun MainScreen(
     onConfirmParentCompletion: () -> Unit,
     onDismissParentCompletion: () -> Unit,
     onAddClick: () -> Unit,
+    onDismissAddTodo: () -> Unit,
+    onSubmitTodo: (AddTodoInput) -> Unit,
 ) {
-    val expandedState = remember(uiState.todayData?.tree) { mutableStateMapOf<String, Boolean>() }
+    val expandedState = remember { mutableStateMapOf<String, Boolean>() }
 
     fun isExpanded(node: TodayTodoNode): Boolean = expandedState[node.todo.id] ?: node.todo.expanded
 
@@ -114,6 +119,7 @@ fun MainScreen(
                 TodayHeader(
                     dateLabel = uiState.dateLabel,
                     secondaryDateLabel = uiState.secondaryDateLabel,
+                    lunarLabel = uiState.lunarLabel,
                     progressLabel = uiState.progressLabel,
                     progress = uiState.progress,
                 )
@@ -169,12 +175,20 @@ fun MainScreen(
             },
         )
     }
+
+    if (uiState.isAddSheetVisible) {
+        AddTodoSheet(
+            onDismiss = onDismissAddTodo,
+            onSubmit = onSubmitTodo,
+        )
+    }
 }
 
 @Composable
 private fun TodayHeader(
     dateLabel: String,
     secondaryDateLabel: String,
+    lunarLabel: String,
     progressLabel: String,
     progress: Float,
 ) {
@@ -190,7 +204,7 @@ private fun TodayHeader(
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                text = "$dateLabel · $secondaryDateLabel",
+                text = "$dateLabel · $secondaryDateLabel · $lunarLabel",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

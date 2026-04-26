@@ -1,5 +1,8 @@
 package com.mytodo.android.data
 
+import android.content.Context
+import com.mytodo.android.widget.TodoWidgetUpdater
+import dagger.hilt.android.qualifiers.ApplicationContext
 import java.time.Clock
 import java.time.LocalDate
 import java.time.OffsetDateTime
@@ -12,6 +15,7 @@ import kotlinx.coroutines.flow.map
 class TodoRepository @Inject constructor(
     private val todoDao: TodoDao,
     private val clock: Clock,
+    @ApplicationContext private val appContext: Context,
 ) {
     fun observeToday(): Flow<TodayTodoData> =
         todoDao.observeAll().map { todos ->
@@ -19,9 +23,51 @@ class TodoRepository @Inject constructor(
             buildTodayTodoData(todos = todos, targetDate = today)
         }
 
+    suspend fun addTodo(
+        content: String,
+        repeatMode: RepeatMode = RepeatMode.NONE,
+        weekdays: List<Int> = emptyList(),
+        intervalDays: Int? = null,
+        anchorDate: LocalDate? = null,
+        specificDates: List<LocalDate> = emptyList(),
+        subtasks: List<String> = emptyList(),
+    ) {
+        val allTodos = todoDao.getAll()
+        val now = nowTimestamp()
+        val parentId = java.util.UUID.randomUUID().toString()
+        val rootSortOrder = nextSortOrder(parentId = null, todos = allTodos)
+        val parentTodo = TodoEntity(
+            id = parentId,
+            content = content,
+            parentId = null,
+            sortOrder = rootSortOrder,
+            repeatMode = repeatMode.value,
+            weekdays = weekdays.takeIf { it.isNotEmpty() }?.joinToString(","),
+            intervalDays = intervalDays,
+            specificDates = specificDates.takeIf { it.isNotEmpty() }?.joinToString(",") { it.toString() },
+            anchorDate = anchorDate?.toString(),
+            createdAt = now,
+            updatedAt = now,
+        )
+        val childTodos = subtasks.mapIndexed { index, title ->
+            TodoEntity(
+                id = java.util.UUID.randomUUID().toString(),
+                content = title,
+                parentId = parentId,
+                sortOrder = index,
+                repeatMode = RepeatMode.NONE.value,
+                createdAt = now,
+                updatedAt = now,
+            )
+        }
+        todoDao.upsertAll(listOf(parentTodo) + childTodos)
+        TodoWidgetUpdater.refreshAll(appContext)
+    }
+
     suspend fun toggleTodo(todoId: String) {
         val todo = todoDao.getById(todoId) ?: return
         updateSingleTodoCompletion(todo = todo, completed = !todo.completed)
+        TodoWidgetUpdater.refreshAll(appContext)
     }
 
     suspend fun completeParentSubtree(parentId: String) {
@@ -43,6 +89,7 @@ class TodoRepository @Inject constructor(
                 )
             }
         }
+        TodoWidgetUpdater.refreshAll(appContext)
 
     }
 
@@ -127,6 +174,15 @@ class TodoRepository @Inject constructor(
             nodes.forEach(::visit)
         }
 
+    private fun nextSortOrder(parentId: String?, todos: List<TodoEntity>): Int =
+        todos
+            .asSequence()
+            .filter { it.parentId == parentId }
+            .map { it.sortOrder }
+            .maxOrNull()
+            ?.plus(1)
+            ?: 0
+
     private fun nowTimestamp(): Long = clock.millis()
 
     private fun nowDateTimeString(): String = OffsetDateTime.now(clock).toString()
@@ -138,11 +194,35 @@ data class TodayTodoData(
     val totalCount: Int,
     val completedCount: Int,
     val progress: Float,
-)
+) {
+    fun findNode(todoId: String): TodayTodoNode? {
+        fun search(nodes: List<TodayTodoNode>): TodayTodoNode? {
+            nodes.forEach { node ->
+                if (node.todo.id == todoId) {
+                    return node
+                }
+
+                val childResult = search(node.children)
+                if (childResult != null) {
+                    return childResult
+                }
+            }
+            return null
+        }
+
+        return search(tree)
+    }
+}
 
 data class TodayTodoNode(
     val todo: TodoEntity,
     val children: List<TodayTodoNode>,
 ) {
     val hasChildren: Boolean = children.isNotEmpty()
+
+    fun unfinishedDescendantCount(): Int =
+        children.sumOf { child ->
+            val selfCount = if (child.todo.completed) 0 else 1
+            selfCount + child.unfinishedDescendantCount()
+        }
 }
