@@ -36,18 +36,18 @@ git commit -m "chore: initial android project structure with dependencies"
 - 创建: `app/src/main/java/com/mytodo/android/data/TodoDao.kt`
 - 创建: `app/src/main/java/com/mytodo/android/data/AppDatabase.kt`
 
-- [ ] **步骤 1: 定义 TodoEntity**
+- [x] **步骤 1: 定义 TodoEntity**
 包含 id, content, parentId, repeatMode, intervalDays, anchorDate, completed 等字段。
 
-- [ ] **步骤 2: 定义 TodoDao**
+- [x] **步骤 2: 定义 TodoDao**
 实现基本的 CRUD 以及按日期查询今日任务的 SQL 逻辑。
 
-- [ ] **步骤 3: 编写数据库迁移与初始化**
+- [x] **步骤 3: 编写数据库迁移与初始化**
 
-- [ ] **步骤 4: 编写单元测试验证 SQL 逻辑**
+- [x] **步骤 4: 编写单元测试验证 SQL 逻辑**
 特别是复杂的重复逻辑（如每 X 天计算）。
 
-- [ ] **步骤 5: 提交代码**
+- [x] **步骤 5: 提交代码**
 ```bash
 git add app/src/main/java/com/mytodo/android/data/
 git commit -m "feat: room database and data models"
