@@ -10,6 +10,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import com.mytodo.android.ui.MainRoute
 import com.mytodo.android.ui.theme.MyTODOAndroidTheme
 import dagger.hilt.android.AndroidEntryPoint
 
@@ -23,12 +24,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background,
                 ) {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(text = "MyTODOAndroid")
-                    }
+                    MainRoute()
                 }
             }
         }

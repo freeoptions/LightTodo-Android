@@ -4,9 +4,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mytodo.android.data.TodayTodoData
 import com.mytodo.android.data.TodayTodoNode
-import com.mytodo.android.data.TodoEntity
 import com.mytodo.android.data.TodoRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -68,6 +69,7 @@ class MainViewModel @Inject constructor(
 data class MainUiState(
     val todayData: TodayTodoData? = null,
     val dateLabel: String = "",
+    val secondaryDateLabel: String = "",
     val progressLabel: String = "0/0",
     val progress: Float = 0f,
     val pendingParentCompletion: ParentCompletionRequest? = null,
@@ -83,12 +85,16 @@ data class ParentCompletionRequest(
 private fun TodayTodoData.toUiState(pendingRequest: ParentCompletionRequest?): MainUiState =
     MainUiState(
         todayData = this,
-        dateLabel = date.toString(),
+        dateLabel = date.format(TITLE_DATE_FORMATTER),
+        secondaryDateLabel = date.format(SECONDARY_DATE_FORMATTER),
         progressLabel = "$completedCount/$totalCount",
         progress = progress,
         pendingParentCompletion = pendingRequest,
         isEmpty = totalCount == 0,
     )
+
+private val TITLE_DATE_FORMATTER = DateTimeFormatter.ofPattern("M月d日", Locale.CHINA)
+private val SECONDARY_DATE_FORMATTER = DateTimeFormatter.ofPattern("EEEE", Locale.CHINA)
 
 private fun TodayTodoData.findNode(todoId: String): TodayTodoNode? {
     fun search(nodes: List<TodayTodoNode>): TodayTodoNode? {

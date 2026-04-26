@@ -1,3 +1,13 @@
 <resources>
     <string name="app_name">MyTODO</string>
+    <string name="today_title">今天</string>
+    <string name="today_progress_title">今日进度</string>
+    <string name="today_task_section_title">任务</string>
+    <string name="today_empty_title">今天没有任务</string>
+    <string name="today_empty_body">点击右下角按钮添加一个任务吧</string>
+    <string name="todo_add_symbol">+</string>
+    <string name="parent_completion_dialog_title">确认完成</string>
+    <string name="parent_completion_dialog_message">任务 \"%1$s\" 还有 %2$d 个未完成的子任务。要将它们全部设为已完成吗？</string>
+    <string name="parent_completion_dialog_confirm">全部完成</string>
+    <string name="parent_completion_dialog_dismiss">取消</string>
 </resources>
