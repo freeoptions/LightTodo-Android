@@ -17,13 +17,13 @@
 - 创建: `app/src/main/AndroidManifest.xml`
 - 创建: `app/src/main/java/com/mytodo/android/MyApplication.kt`
 
-- [ ] **步骤 1: 初始化 Gradle 配置**
+- [x] **步骤 1: 初始化 Gradle 配置**
 配置项目根目录和 app 模块的 build.gradle.kts，添加 Compose, Room, Hilt, Glance 依赖。
 
-- [ ] **步骤 2: 创建 Application 类**
+- [x] **步骤 2: 创建 Application 类**
 初始化 Hilt 依赖注入。
 
-- [ ] **步骤 3: 提交代码**
+- [x] **步骤 3: 提交代码**
 ```bash
 git add .
 git commit -m "chore: initial android project structure with dependencies"
