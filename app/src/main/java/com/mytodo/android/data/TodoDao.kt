@@ -39,6 +39,9 @@ interface TodoDao {
     )
     suspend fun getRecurrenceCandidates(targetDate: String): List<TodoEntity>
 
+    @Query("SELECT * FROM todos ORDER BY sortOrder ASC, createdAt ASC")
+    suspend fun getAll(): List<TodoEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(todo: TodoEntity)
 
