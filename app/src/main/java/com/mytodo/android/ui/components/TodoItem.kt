@@ -1,25 +1,31 @@
 package com.mytodo.android.ui.components
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
+import com.mytodo.android.R
 import com.mytodo.android.data.TodayTodoNode
 
 @Composable
@@ -55,15 +61,18 @@ fun TodoItem(
         ) {
             Box(modifier = Modifier.size(24.dp), contentAlignment = Alignment.Center) {
                 if (hasChildren) {
-                    Text(
-                        text = if (expanded) "⌄" else ">",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier
-                            .clip(MaterialTheme.shapes.extraSmall)
-                            .clickable { onExpandToggle(todo.id) }
-                            .padding(horizontal = 4.dp, vertical = 2.dp),
-                    )
+                    IconButton(
+                        onClick = { onExpandToggle(todo.id) },
+                        modifier = Modifier.size(24.dp),
+                    ) {
+                        Icon(
+                            imageVector = if (expanded) Icons.Filled.ExpandMore else Icons.Filled.ChevronRight,
+                            contentDescription = stringResource(
+                                id = if (expanded) R.string.todo_collapse_action else R.string.todo_expand_action,
+                            ),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
 
@@ -80,7 +89,7 @@ fun TodoItem(
                 )
                 if (hasChildren) {
                     Text(
-                        text = if (expanded) "点击左侧收起子任务" else "点击左侧展开子任务",
+                        text = if (expanded) stringResource(id = R.string.todo_collapse_hint) else stringResource(id = R.string.todo_expand_hint),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -100,34 +109,17 @@ private fun TodoCheckBox(
     checked: Boolean,
     onClick: () -> Unit,
 ) {
-    Box(
+    Checkbox(
+        checked = checked,
+        onCheckedChange = { onClick() },
         modifier = Modifier
             .size(44.dp)
-            .clip(MaterialTheme.shapes.extraSmall)
-            .clickable(onClick = onClick)
-            .padding(8.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(24.dp)
-                .clip(MaterialTheme.shapes.extraSmall)
-                .background(
-                    color = if (checked) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.surfaceVariant
-                    },
-                ),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (checked) {
-                Text(
-                    text = "✓",
-                    color = MaterialTheme.colorScheme.onPrimary,
-                    style = MaterialTheme.typography.labelLarge,
-                )
-            }
-        }
-    }
+            .semantics {
+                contentDescription = if (checked) {
+                    stringResource(id = R.string.todo_mark_incomplete_action)
+                } else {
+                    stringResource(id = R.string.todo_mark_complete_action)
+                }
+            },
+    )
 }

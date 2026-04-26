@@ -67,8 +67,21 @@ fun MainScreen(
 
     fun isExpanded(node: TodayTodoNode): Boolean = expandedState[node.todo.id] ?: node.todo.expanded
 
+    fun findExpandedState(nodes: List<TodayTodoNode>, todoId: String): Boolean? {
+        nodes.forEach { node ->
+            if (node.todo.id == todoId) {
+                return node.todo.expanded
+            }
+
+            findExpandedState(node.children, todoId)?.let { return it }
+        }
+        return null
+    }
+
     fun onExpandToggle(todoId: String) {
-        val current = expandedState[todoId] ?: true
+        val current = expandedState[todoId]
+            ?: findExpandedState(uiState.todayData?.tree.orEmpty(), todoId)
+            ?: true
         expandedState[todoId] = !current
     }
 

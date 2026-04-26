@@ -6,6 +6,12 @@
     <string name="today_empty_title">今天没有任务</string>
     <string name="today_empty_body">点击右下角按钮添加一个任务吧</string>
     <string name="todo_add_symbol">+</string>
+    <string name="todo_expand_hint">点击左侧展开子任务</string>
+    <string name="todo_collapse_hint">点击左侧收起子任务</string>
+    <string name="todo_expand_action">展开子任务</string>
+    <string name="todo_collapse_action">收起子任务</string>
+    <string name="todo_mark_complete_action">标记为已完成</string>
+    <string name="todo_mark_incomplete_action">标记为未完成</string>
     <string name="parent_completion_dialog_title">确认完成</string>
     <string name="parent_completion_dialog_message">任务 \"%1$s\" 还有 %2$d 个未完成的子任务。要将它们全部设为已完成吗？</string>
     <string name="parent_completion_dialog_confirm">全部完成</string>
