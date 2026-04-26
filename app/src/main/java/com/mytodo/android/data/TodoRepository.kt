@@ -44,14 +44,6 @@ class TodoRepository @Inject constructor(
             }
         }
 
-        if (!target.completed && parentId !in subtreeIds) {
-            todoDao.updateCompletion(
-                id = target.id,
-                completed = true,
-                completedAt = completedAt,
-                updatedAt = now,
-            )
-        }
     }
 
     suspend fun hasChildren(todoId: String): Boolean =
