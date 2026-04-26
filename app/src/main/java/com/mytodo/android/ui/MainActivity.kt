@@ -131,14 +131,12 @@ fun MainScreen(
                         color = MaterialTheme.colorScheme.onSurface,
                     )
                 }
-                item {
-                    TodoList(
-                        nodes = uiState.todayData?.tree.orEmpty(),
-                        isExpanded = ::isExpanded,
-                        onExpandToggle = ::onExpandToggle,
-                        onCheckedChange = onToggleTodo,
-                    )
-                }
+                TodoList(
+                    nodes = uiState.todayData?.tree.orEmpty(),
+                    isExpanded = ::isExpanded,
+                    onExpandToggle = ::onExpandToggle,
+                    onCheckedChange = onToggleTodo,
+                )
             }
         }
     }

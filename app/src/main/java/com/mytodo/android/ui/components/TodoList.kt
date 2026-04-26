@@ -1,70 +1,78 @@
 package com.mytodo.android.ui.components
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.lazy.LazyItemScope
+import androidx.compose.foundation.lazy.animateItem
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Divider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import com.mytodo.android.data.TodayTodoNode
 
-@Composable
-fun TodoList(
+fun androidx.compose.foundation.lazy.LazyListScope.TodoList(
     nodes: List<TodayTodoNode>,
     isExpanded: (TodayTodoNode) -> Boolean,
     onExpandToggle: (String) -> Unit,
     onCheckedChange: (String) -> Unit,
-    modifier: Modifier = Modifier,
 ) {
-    Column(
-        modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(0.dp),
-    ) {
-        nodes.forEachIndexed { index, node ->
-            TodoBranch(
-                node = node,
-                depth = 0,
-                isExpanded = isExpanded,
-                onExpandToggle = onExpandToggle,
-                onCheckedChange = onCheckedChange,
-            )
+    val visibleRows = buildVisibleRows(nodes = nodes, isExpanded = isExpanded)
 
-            if (index != nodes.lastIndex) {
-                Divider(color = MaterialTheme.colorScheme.outlineVariant)
-            }
-        }
+    items(
+        items = visibleRows,
+        key = { row -> row.node.todo.id },
+    ) { row ->
+        TodoRowItem(
+            row = row,
+            isLast = row == visibleRows.last(),
+            onExpandToggle = onExpandToggle,
+            onCheckedChange = onCheckedChange,
+        )
     }
 }
 
 @Composable
-private fun TodoBranch(
-    node: TodayTodoNode,
-    depth: Int,
-    isExpanded: (TodayTodoNode) -> Boolean,
+private fun LazyItemScope.TodoRowItem(
+    row: VisibleTodoRow,
+    isLast: Boolean,
     onExpandToggle: (String) -> Unit,
     onCheckedChange: (String) -> Unit,
 ) {
-    val expanded = isExpanded(node)
-
     TodoItem(
-        node = node,
-        depth = depth,
-        expanded = expanded,
+        node = row.node,
+        depth = row.depth,
+        expanded = row.expanded,
         onExpandToggle = onExpandToggle,
         onCheckedChange = onCheckedChange,
+        modifier = Modifier.animateItem(),
     )
 
-    if (node.hasChildren && expanded) {
-        node.children.forEach { child ->
-            TodoBranch(
-                node = child,
-                depth = depth + 1,
-                isExpanded = isExpanded,
-                onExpandToggle = onExpandToggle,
-                onCheckedChange = onCheckedChange,
-            )
+    if (!isLast) {
+        Divider(color = MaterialTheme.colorScheme.outlineVariant)
+    }
+}
+
+private data class VisibleTodoRow(
+    val node: TodayTodoNode,
+    val depth: Int,
+    val expanded: Boolean,
+)
+
+private fun buildVisibleRows(
+    nodes: List<TodayTodoNode>,
+    isExpanded: (TodayTodoNode) -> Boolean,
+): List<VisibleTodoRow> {
+    val rows = mutableListOf<VisibleTodoRow>()
+
+    fun append(nodes: List<TodayTodoNode>, depth: Int) {
+        nodes.forEach { node ->
+            val expanded = isExpanded(node)
+            rows += VisibleTodoRow(node = node, depth = depth, expanded = expanded)
+            if (node.hasChildren && expanded) {
+                append(node.children, depth + 1)
+            }
         }
     }
+
+    append(nodes, depth = 0)
+    return rows
 }

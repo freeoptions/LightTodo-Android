@@ -42,7 +42,7 @@ class MainViewModel @Inject constructor(
                         ParentCompletionRequest(
                             todoId = node.todo.id,
                             title = node.todo.content,
-                            childCount = node.children.size,
+                            childCount = node.unfinishedDescendantCount(),
                         )
                     return@launch
                 }
@@ -113,3 +113,9 @@ private fun TodayTodoData.findNode(todoId: String): TodayTodoNode? {
 
     return search(tree)
 }
+
+private fun TodayTodoNode.unfinishedDescendantCount(): Int =
+    children.sumOf { child ->
+        val selfCount = if (child.todo.completed) 0 else 1
+        selfCount + child.unfinishedDescendantCount()
+    }
