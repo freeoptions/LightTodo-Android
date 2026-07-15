@@ -8,15 +8,16 @@ plugins {
 }
 
 android {
-    namespace = "com.mytodo.android"
+    namespace = "com.lighttodo.android"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.mytodo.android"
+        applicationId = "com.lighttodo.android"
         minSdk = 28
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
+        setProperty("archivesBaseName", "轻待办")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -62,6 +63,7 @@ room {
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.activity.compose)
 
     implementation(platform(libs.androidx.compose.bom))
@@ -69,6 +71,8 @@ dependencies {
     implementation(libs.androidx.ui.graphics)
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
+    implementation(libs.androidx.material.icons.extended)
+    implementation(libs.androidx.documentfile)
     implementation(libs.material)
 
     implementation(libs.androidx.room.runtime)

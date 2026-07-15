@@ -1,10 +1,15 @@
 <resources>
-    <string name="app_name">MyTODO</string>
+    <string name="app_name">轻待办</string>
     <string name="today_title">今天</string>
     <string name="today_progress_title">今日进度</string>
     <string name="today_task_section_title">任务</string>
+    <string name="today_incomplete_section_title">未完成</string>
+    <string name="today_completed_section_title">已完成</string>
+    <string name="today_section_count">%1$d 个</string>
+    <string name="today_no_incomplete">暂无未完成任务</string>
+    <string name="today_no_completed">暂无已完成任务</string>
     <string name="today_empty_title">今天没有任务</string>
-    <string name="today_empty_body">点击右下角按钮添加一个任务吧</string>
+    <string name="today_empty_body">点右下角按钮添加一个任务吧</string>
     <string name="todo_add_symbol">+</string>
     <string name="todo_expand_hint">点击左侧展开子任务</string>
     <string name="todo_collapse_hint">点击左侧收起子任务</string>
@@ -12,12 +17,15 @@
     <string name="todo_collapse_action">收起子任务</string>
     <string name="todo_mark_complete_action">标记为已完成</string>
     <string name="todo_mark_incomplete_action">标记为未完成</string>
+    <string name="todo_repeat_weekdays_badge">周内重复</string>
+    <string name="todo_repeat_monthly_badge">月内重复</string>
     <string name="parent_completion_dialog_title">确认完成</string>
-    <string name="parent_completion_dialog_message">任务 \"%1$s\" 还有 %2$d 个未完成的子任务。要将它们全部设为已完成吗？</string>
+    <string name="parent_completion_dialog_message">任务 \"%1$s\" 还有 %2$d 个未完成的子任务。要把它们全部设为已完成吗？</string>
     <string name="parent_completion_dialog_confirm">全部完成</string>
     <string name="parent_completion_dialog_dismiss">取消</string>
 
     <string name="add_todo_title">新增任务</string>
+    <string name="edit_todo_title">编辑任务</string>
     <string name="add_todo_placeholder">我想做...</string>
     <string name="add_todo_repeat_title">重复模式</string>
     <string name="add_todo_subtasks_title">子任务</string>
@@ -28,11 +36,44 @@
     <string name="add_todo_specific_dates_placeholder">2026-04-26,2026-04-28</string>
     <string name="add_todo_specific_dates_hint">多个日期用英文逗号分隔</string>
     <string name="add_todo_submit">添加</string>
+    <string name="edit_todo_submit">保存</string>
     <string name="add_todo_cancel">取消</string>
+    <string name="delete_todo_action">删除待办</string>
+    <string name="delete_todo_dialog_title">删除待办</string>
+    <string name="delete_todo_dialog_message">确定删除 \"%1$s\" 吗？这个操作不能撤销。</string>
+    <string name="delete_todo_dialog_confirm">删除</string>
+    <string name="delete_todo_dialog_cancel">取消</string>
 
     <string name="repeat_none">不重复</string>
     <string name="repeat_daily">每天</string>
+    <string name="repeat_weekdays">周内重复</string>
     <string name="repeat_weekly">每周</string>
+    <string name="repeat_monthly">月内重复</string>
     <string name="repeat_interval">周期重复</string>
     <string name="repeat_specific">特定日期</string>
+
+    <string name="export_choose_location">导出位置</string>
+    <string name="export_json">导出 JSON</string>
+    <string name="export_location_unset">导出位置：未配置</string>
+    <string name="export_location_set">导出位置：%1$s</string>
+    <string name="export_select_location_success">已设置导出位置：%1$s</string>
+    <string name="export_select_location_failed">导出位置授权失败</string>
+    <string name="export_missing_location">请先配置导出位置</string>
+    <string name="export_success">已导出：%1$s</string>
+    <string name="export_failed">导出失败：%1$s</string>
+    <string name="export_invalid_location">导出位置无效</string>
+    <string name="export_location_not_writable">导出位置不可写</string>
+    <string name="export_create_file_failed">创建导出文件失败</string>
+    <string name="export_open_file_failed">打开导出文件失败</string>
+
+    <string name="widget_today">今天</string>
+    <string name="widget_progress">进度 %1$s</string>
+    <string name="widget_incomplete">未完成</string>
+    <string name="widget_completed">已完成</string>
+    <string name="widget_completed_celebration">完成啦</string>
+    <string name="widget_empty">今天没有任务</string>
+    <string name="import_json">导入 JSON</string>
+    <string name="import_success">已导入配置</string>
+    <string name="import_failed">导入失败：%1$s</string>
+    <string name="import_open_file_failed">打开导入文件失败</string>
 </resources>
