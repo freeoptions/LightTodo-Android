@@ -3,52 +3,32 @@ package com.lighttodo.android.widget
 import com.lighttodo.android.data.RepeatMode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TodoWidgetTest {
     @Test
-    fun `applyOptimisticToggle should update row and progress immediately`() {
+    fun `progress counts leaf todos only`() {
         val rows = listOf(
-            widgetRow(todoId = "parent", title = "Parent", hasChildren = true, depth = 0),
-            widgetRow(todoId = "child-1", title = "Child 1", depth = 1),
+            widgetRow(todoId = "parent", title = "Parent", completed = true, hasChildren = true, depth = 0),
+            widgetRow(todoId = "child-1", title = "Child 1", completed = true, depth = 1),
             widgetRow(todoId = "child-2", title = "Child 2", depth = 1),
         )
 
-        val result = applyOptimisticToggle(rows, todoId = "child-1", completed = true)
+        val result = progressLabelForRows(rows)
 
-        requireNotNull(result)
-        assertTrue(result.first { it.todoId == "child-1" }.completed)
-        assertTrue(result.first { it.todoId == "child-1" }.celebrating)
-        assertFalse(result.first { it.todoId == "parent" }.completed)
-        assertEquals("1/2", progressLabelForRows(result))
+        assertEquals("1/2", result)
     }
 
     @Test
-    fun `applyOptimisticToggle should update parent subtree immediately`() {
-        val rows = listOf(
-            widgetRow(todoId = "parent", title = "Parent", hasChildren = true, depth = 0),
-            widgetRow(todoId = "child-1", title = "Child 1", depth = 1),
-            widgetRow(todoId = "child-2", title = "Child 2", depth = 1),
+    fun `clearing celebration removes stale optimistic row state`() {
+        val snapshot = TodoWidgetSnapshot(
+            rows = listOf(widgetRow(todoId = "todo", title = "Todo").copy(celebrating = true)),
+            progressLabel = "1/1",
         )
 
-        val result = applyOptimisticToggle(rows, todoId = "parent", completed = true)
+        val result = snapshot.withCelebration(null)
 
-        requireNotNull(result)
-        assertTrue(result.all { it.completed })
-        assertTrue(result.first { it.todoId == "parent" }.celebrating)
-        assertFalse(result.first { it.todoId == "child-1" }.celebrating)
-        assertEquals("2/2", progressLabelForRows(result))
-    }
-
-    @Test
-    fun `applyOptimisticToggle should return null for unknown row`() {
-        val rows = listOf(widgetRow(todoId = "known", title = "Known"))
-
-        val result = applyOptimisticToggle(rows, todoId = "missing", completed = true)
-
-        assertNull(result)
+        assertFalse(result.rows.single().celebrating)
     }
 
     private fun widgetRow(

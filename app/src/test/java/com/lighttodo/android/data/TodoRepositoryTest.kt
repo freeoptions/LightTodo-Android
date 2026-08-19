@@ -101,15 +101,62 @@ class TodoRepositoryTest {
     }
 
     @Test
-    fun `toggleTodoFromWidget should use recurrence candidates instead of full table`() = runTest {
+    fun `toggleTodoFromWidget should resolve the clicked todo from the full table`() = runTest {
         val todo = createTodo("1", "Widget task", completed = false)
-        coEvery { todoDao.getRecurrenceCandidates("2026-04-26") } returns listOf(todo)
+        coEvery { todoDao.getAll() } returns listOf(todo)
 
-        repository.toggleTodoFromWidget("1")
+        val result = repository.toggleTodoFromWidget("1")
 
-        coVerify(exactly = 1) { todoDao.getRecurrenceCandidates("2026-04-26") }
-        coVerify(exactly = 0) { todoDao.getAll() }
+        assertTrue(result)
+        coVerify(exactly = 1) { todoDao.getAll() }
+        coVerify(exactly = 0) { todoDao.getRecurrenceCandidates(any()) }
         coVerify(exactly = 1) { todoDao.updateCompletion("1", true, any(), any()) }
+    }
+
+    @Test
+    fun `toggleTodoFromWidget reports stale widget rows`() = runTest {
+        coEvery { todoDao.getAll() } returns emptyList()
+
+        val result = repository.toggleTodoFromWidget("missing", completed = true)
+
+        assertFalse(result)
+        coVerify(exactly = 0) { todoDao.updateCompletion(any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun `widget completion uses requested state instead of toggling twice`() = runTest {
+        val todo = createTodo(
+            id = "1",
+            content = "Widget task",
+            completed = true,
+            completedAt = "2026-04-26T09:00:00Z",
+        )
+        coEvery { todoDao.getAll() } returns listOf(todo)
+
+        repository.toggleTodoFromWidget("1", completed = true)
+
+        coVerify(exactly = 0) { todoDao.updateCompletion(any(), any(), any(), any()) }
+        coVerify(exactly = 0) { todoDao.updateCompletions(any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun `widget can clear completed parent subtree using requested state`() = runTest {
+        val todos = listOf(
+            createTodo("1", "Parent", completed = true, completedAt = "2026-04-26T09:00:00Z"),
+            createTodo("2", "Child", parentId = "1", completed = true, completedAt = "2026-04-26T09:00:00Z"),
+        )
+        coEvery { todoDao.getAll() } returns todos
+
+        repository.toggleTodoFromWidget("1", completed = false)
+
+        coVerify(exactly = 1) {
+            todoDao.updateCompletions(
+                match { ids -> ids.toSet() == setOf("1", "2") },
+                false,
+                null,
+                any(),
+            )
+        }
     }
 
     @Test
@@ -174,6 +221,21 @@ class TodoRepositoryTest {
         assertTrue(repository.buildTodayTodoData(listOf(todo), firstDay).tree.first().todo.completed)
         assertTrue(middleDayResult.tree.first().todo.completed)
         assertFalse(nextMonthResult.tree.first().todo.completed)
+    }
+
+    @Test
+    fun `repeat completion accepts legacy local datetime values`() {
+        val todo = createTodo(
+            id = "1",
+            content = "Legacy repeat task",
+            repeatMode = RepeatMode.DAILY.value,
+            completed = true,
+            completedAt = "2026-04-26T09:00:00",
+        )
+
+        val result = repository.buildTodayTodoData(listOf(todo), LocalDate.parse("2026-04-26"))
+
+        assertTrue(result.tree.first().todo.completed)
     }
 
     @Test

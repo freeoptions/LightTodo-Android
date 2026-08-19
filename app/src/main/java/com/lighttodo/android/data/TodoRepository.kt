@@ -145,17 +145,22 @@ class TodoRepository @Inject constructor(
         }
     }
 
-    suspend fun toggleTodoFromWidget(todoId: String) {
+    suspend fun toggleTodoFromWidget(todoId: String, completed: Boolean? = null): Boolean {
         val targetDate = LocalDate.now(clock)
-        val allTodos = todoDao.getRecurrenceCandidates(targetDate.toString())
-        val todo = allTodos.firstOrNull { it.id == todoId } ?: return
+        val allTodos = todoDao.getAll()
+        val todo = allTodos.firstOrNull { it.id == todoId } ?: return false
         val todoById = allTodos.associateBy { it.id }
         val descendantsByParent = allTodos.groupBy { it.parentId }
         val hasChildren = descendantsByParent[todo.id].orEmpty().isNotEmpty()
         val completionRepeatMode = todo.completionRepeatMode(todoById)
         val currentlyCompleted = todo.isCompletedForDate(targetDate, completionRepeatMode)
+        val targetCompleted = completed ?: !currentlyCompleted
 
-        if (hasChildren && !currentlyCompleted && hasUnfinishedDescendants(todo.id, descendantsByParent, todoById, targetDate)) {
+        if (targetCompleted == currentlyCompleted) {
+            return true
+        }
+
+        if (hasChildren && targetCompleted && hasUnfinishedDescendants(todo.id, descendantsByParent, todoById, targetDate)) {
             completeParentSubtreeWithSnapshot(
                 parentId = todoId,
                 allTodos = allTodos,
@@ -166,8 +171,10 @@ class TodoRepository @Inject constructor(
                 todoId = todoId,
                 allTodos = allTodos,
                 targetDate = targetDate,
+                targetCompleted = targetCompleted,
             )
         }
+        return true
     }
 
     suspend fun completeParentSubtree(parentId: String, refreshWidgets: Boolean = true) {
@@ -275,6 +282,7 @@ class TodoRepository @Inject constructor(
         todoId: String,
         allTodos: List<TodoEntity>,
         targetDate: LocalDate,
+        targetCompleted: Boolean? = null,
     ) {
         val todo = allTodos.firstOrNull { it.id == todoId } ?: return
         val descendantsByParent = allTodos.groupBy { it.parentId }
@@ -284,8 +292,13 @@ class TodoRepository @Inject constructor(
         }.toMutableMap()
         val hasChildren = descendantsByParent[todo.id].orEmpty().isNotEmpty()
         val currentlyCompleted = completionStateById[todo.id] == true
+        val newCompleted = targetCompleted ?: !currentlyCompleted
 
-        if (hasChildren && currentlyCompleted) {
+        if (newCompleted == currentlyCompleted) {
+            return
+        }
+
+        if (hasChildren && !newCompleted) {
             val subtreeIds = collectSubtreeIds(rootId = todo.id, descendantsByParent = descendantsByParent)
             val updatedAt = nowTimestamp()
             updateCompletionForIds(
@@ -296,8 +309,8 @@ class TodoRepository @Inject constructor(
             )
             subtreeIds.forEach { id -> completionStateById[id] = false }
         } else {
-            updateCompletionForDate(todo = todo, completed = !currentlyCompleted)
-            completionStateById[todo.id] = !currentlyCompleted
+            updateCompletionForDate(todo = todo, completed = newCompleted)
+            completionStateById[todo.id] = newCompleted
         }
 
         syncAncestors(
@@ -564,8 +577,7 @@ private fun TodoEntity.isCompletedForDate(targetDate: LocalDate, repeatMode: Rep
         return completed
     }
 
-    val completionDate = completedAt
-        ?.let { value -> runCatching { OffsetDateTime.parse(value).toLocalDate() }.getOrNull() }
+    val completionDate = completedAt?.toCompletionDateOrNull()
 
     if (!completed || completionDate == null) {
         return false
@@ -578,6 +590,11 @@ private fun TodoEntity.isCompletedForDate(targetDate: LocalDate, repeatMode: Rep
         else -> completionDate == targetDate
     }
 }
+
+private fun String.toCompletionDateOrNull(): LocalDate? =
+    runCatching { OffsetDateTime.parse(this).toLocalDate() }.getOrNull()
+        ?: runCatching { java.time.LocalDateTime.parse(this).toLocalDate() }.getOrNull()
+        ?: runCatching { LocalDate.parse(this) }.getOrNull()
 
 private fun LocalDate.isInSameWeekAs(other: LocalDate): Boolean =
     with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY)) ==

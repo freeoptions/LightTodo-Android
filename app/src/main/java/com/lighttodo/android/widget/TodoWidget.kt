@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.BroadcastReceiver
 import android.content.Intent
 import android.os.Build
+import android.util.Log
 import android.appwidget.AppWidgetManager
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
@@ -59,9 +60,10 @@ import java.time.ZoneId
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -82,7 +84,7 @@ private val PrimaryText = glanceColorProvider(day = Color(0xFF0F172A), night = C
 private val CompletedText = glanceColorProvider(day = Color(0xFF166534), night = Color(0xFF166534))
 private val OnAccentText = glanceColorProvider(day = Color(0xFFFFFFFF), night = Color(0xFFFFFFFF))
 private val CheckBoxTouchSize = 36.dp
-private val WidgetActionScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+private val WidgetMutationMutex = Mutex()
 
 class TodoWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
@@ -343,36 +345,39 @@ class ToggleTodoAction : ActionCallback {
     ) {
         val todoId = parameters[TodoIdKey] ?: return
         val appContext = context.applicationContext
-        val checked = parameters[ToggleableStateKey]
+        val requestedCompleted = parameters[ToggleableStateKey]
+            ?: TodoWidgetCache.read(appContext)
+                ?.rows
+                ?.firstOrNull { row -> row.todoId == todoId }
+                ?.completed
+                ?.not()
+            ?: return
 
-        val optimisticallyUpdated = withContext(Dispatchers.IO) {
-            TodoWidgetCache.toggleOptimistically(
-                context = appContext,
-                todoId = todoId,
-                checked = checked,
-            )
-        }
-        if (optimisticallyUpdated) {
-            TodoWidget().update(appContext, glanceId)
-        }
-
-        WidgetActionScope.launch {
-            runCatching {
+        val persistenceResult = withContext(Dispatchers.IO) {
+            WidgetMutationMutex.withLock {
                 val entryPoint = EntryPointAccessors.fromApplication(appContext, TodoWidgetEntryPoint::class.java)
                 val todoRepository = entryPoint.todoRepository()
-                todoRepository.toggleTodoFromWidget(todoId)
-            }
-            TodoWidgetUpdater.refreshAfterInteraction(
-                context = appContext,
-                glanceId = glanceId,
-                forceDataReload = true,
-            )
-
-            delay(WidgetCelebrationDurationMs)
-            if (TodoWidgetCache.clearCelebration(appContext, todoId)) {
-                TodoWidget().update(appContext, glanceId)
+                runCatching {
+                    todoRepository.toggleTodoFromWidget(
+                        todoId = todoId,
+                        completed = requestedCompleted,
+                    )
+                }
             }
         }
+        persistenceResult.exceptionOrNull()?.let { error ->
+            Log.e(WidgetLogTag, "桌面小组件更新待办状态失败：$todoId", error)
+        }
+        if (persistenceResult.getOrNull() == false) {
+            Log.w(WidgetLogTag, "桌面小组件中的待办已不存在：$todoId")
+        }
+
+        TodoWidgetCache.clearCelebration(appContext, todoId)
+        TodoWidgetUpdater.refreshAfterInteraction(
+            context = appContext,
+            glanceId = glanceId,
+            forceDataReload = true,
+        )
     }
 }
 
@@ -435,11 +440,7 @@ internal data class TodoWidgetSnapshot(
     val progressLabel: String,
 ) {
     fun withCelebration(todoId: String?): TodoWidgetSnapshot =
-        if (todoId == null) {
-            this
-        } else {
-            copy(rows = rows.map { row -> row.copy(celebrating = row.todoId == todoId) })
-        }
+        copy(rows = rows.map { row -> row.copy(celebrating = todoId != null && row.todoId == todoId) })
 
     companion object {
         val Empty = TodoWidgetSnapshot(rows = emptyList(), progressLabel = "0/0")
@@ -490,13 +491,8 @@ object TodoWidgetUpdater {
         val appContext = context.applicationContext
         scheduleNextDailyRefresh(appContext)
         TodoWidgetCache.setReloadRequested(appContext, true)
-        repeat(WidgetRefreshRetryCount) { index ->
-            runCatching {
-                TodoWidget().updateAll(appContext)
-            }
-            if (index < WidgetRefreshRetryCount - 1) {
-                delay(WidgetRefreshRetryDelayMs)
-            }
+        runCatching {
+            TodoWidget().updateAll(appContext)
         }
     }
 
@@ -553,9 +549,7 @@ private val WidgetRefreshActions = setOf(
 )
 private const val WidgetDailyRefreshAction = "com.lighttodo.android.widget.action.DAILY_REFRESH"
 private const val WidgetDailyRefreshRequestCode = 1001
-private const val WidgetRefreshRetryCount = 2
-private const val WidgetRefreshRetryDelayMs = 700L
-private const val WidgetCelebrationDurationMs = 1500L
+private const val WidgetLogTag = "LightTodoWidget"
 
 private object TodoWidgetCache {
     private const val PreferencesName = "lighttodo_widget_cache"
@@ -564,58 +558,35 @@ private object TodoWidgetCache {
     private const val CelebrationTodoIdKey = "celebration_todo_id"
     private const val CelebrationExpiresAtKey = "celebration_expires_at"
     private const val ReloadRequestedKey = "reload_requested"
+    private var memorySnapshot: TodoWidgetSnapshot? = null
 
+    @Synchronized
     fun read(context: Context): TodoWidgetSnapshot? {
+        memorySnapshot?.let { snapshot ->
+            return snapshot.withCelebration(activeCelebrationTodoId(context))
+        }
+
         val preferences = context.getSharedPreferences(PreferencesName, Context.MODE_PRIVATE)
         val rowsJson = preferences.getString(RowsKey, null) ?: return null
         val rows = runCatching { rowsFromJson(rowsJson) }.getOrNull() ?: return null
         val progressLabel = preferences.getString(ProgressLabelKey, null) ?: progressLabelForRows(rows)
         return TodoWidgetSnapshot(rows = rows, progressLabel = progressLabel)
+            .also { memorySnapshot = it }
             .withCelebration(activeCelebrationTodoId(context))
     }
 
+    @Synchronized
     fun write(context: Context, snapshot: TodoWidgetSnapshot) {
+        val snapshotWithoutCelebration = snapshot.withCelebration(null)
+        memorySnapshot = snapshotWithoutCelebration
         context.getSharedPreferences(PreferencesName, Context.MODE_PRIVATE)
             .edit()
-            .putString(RowsKey, rowsToJson(snapshot.rows))
-            .putString(ProgressLabelKey, snapshot.progressLabel)
-            .commit()
+            .putString(RowsKey, rowsToJson(snapshotWithoutCelebration.rows))
+            .putString(ProgressLabelKey, snapshotWithoutCelebration.progressLabel)
+            .apply()
     }
 
-    fun toggleOptimistically(
-        context: Context,
-        todoId: String,
-        checked: Boolean?,
-    ): Boolean {
-        val currentSnapshot = read(context) ?: return false
-        val newCompleted = checked ?: currentSnapshot.rows.firstOrNull { it.todoId == todoId }
-            ?.completed
-            ?.not()
-            ?: return false
-        val updatedRows = applyOptimisticToggle(
-            rows = currentSnapshot.rows,
-            todoId = todoId,
-            completed = newCompleted,
-        ) ?: return false
-        val celebrationTodoId = todoId.takeIf { newCompleted }
-        val celebrationExpiresAt = if (newCompleted) {
-            System.currentTimeMillis() + WidgetCelebrationDurationMs
-        } else {
-            0L
-        }
-
-        context.getSharedPreferences(PreferencesName, Context.MODE_PRIVATE)
-            .edit()
-            .putString(RowsKey, rowsToJson(updatedRows))
-            .putString(ProgressLabelKey, progressLabelForRows(updatedRows))
-            .putString(CelebrationTodoIdKey, celebrationTodoId)
-            .putLong(CelebrationExpiresAtKey, celebrationExpiresAt)
-            .putBoolean(ReloadRequestedKey, false)
-            .commit()
-
-        return true
-    }
-
+    @Synchronized
     fun clearCelebration(context: Context, todoId: String): Boolean {
         val preferences = context.getSharedPreferences(PreferencesName, Context.MODE_PRIVATE)
         if (preferences.getString(CelebrationTodoIdKey, null) != todoId) {
@@ -625,7 +596,7 @@ private object TodoWidgetCache {
         preferences.edit()
             .remove(CelebrationTodoIdKey)
             .remove(CelebrationExpiresAtKey)
-            .commit()
+            .apply()
         return true
     }
 
@@ -644,7 +615,7 @@ private object TodoWidgetCache {
         context.getSharedPreferences(PreferencesName, Context.MODE_PRIVATE)
             .edit()
             .putBoolean(ReloadRequestedKey, requested)
-            .commit()
+            .apply()
     }
 
     private fun rowsToJson(rows: List<TodoWidgetRow>): String =
@@ -684,64 +655,9 @@ private object TodoWidgetCache {
     }
 }
 
-internal fun applyOptimisticToggle(
-    rows: List<TodoWidgetRow>,
-    todoId: String,
-    completed: Boolean,
-): List<TodoWidgetRow>? {
-    val targetIndex = rows.indexOfFirst { it.todoId == todoId }
-    if (targetIndex < 0) {
-        return null
-    }
-
-    val updatedRows = rows.toMutableList()
-    val target = updatedRows[targetIndex]
-    updatedRows[targetIndex] = target.copy(completed = completed, celebrating = completed)
-
-    if (target.hasChildren) {
-        var index = targetIndex + 1
-        while (index < updatedRows.size && updatedRows[index].depth > target.depth) {
-            updatedRows[index] = updatedRows[index].copy(completed = completed, celebrating = false)
-            index++
-        }
-    }
-
-    return normalizeParentCompletion(updatedRows)
-}
-
 internal fun progressLabelForRows(rows: List<TodoWidgetRow>): String {
     val leafRows = rows.filterNot { it.hasChildren }
     val totalCount = leafRows.size
     val completedCount = leafRows.count { it.completed }
     return "$completedCount/$totalCount"
-}
-
-private fun normalizeParentCompletion(rows: List<TodoWidgetRow>): List<TodoWidgetRow> {
-    val updatedRows = rows.toMutableList()
-    for (index in updatedRows.indices.reversed()) {
-        val row = updatedRows[index]
-        if (!row.hasChildren) {
-            continue
-        }
-
-        val children = directChildrenOf(updatedRows, index)
-        if (children.isNotEmpty()) {
-            updatedRows[index] = row.copy(completed = children.all { child -> child.completed })
-        }
-    }
-    return updatedRows
-}
-
-private fun directChildrenOf(rows: List<TodoWidgetRow>, parentIndex: Int): List<TodoWidgetRow> {
-    val parentDepth = rows[parentIndex].depth
-    val directChildDepth = parentDepth + 1
-    val children = mutableListOf<TodoWidgetRow>()
-    var index = parentIndex + 1
-    while (index < rows.size && rows[index].depth > parentDepth) {
-        if (rows[index].depth == directChildDepth) {
-            children += rows[index]
-        }
-        index++
-    }
-    return children
 }

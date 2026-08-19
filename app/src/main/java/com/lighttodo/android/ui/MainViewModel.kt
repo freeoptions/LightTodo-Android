@@ -20,7 +20,6 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -77,12 +76,7 @@ class MainViewModel @Inject constructor(
 
     fun refreshWidgets() {
         viewModelScope.launch {
-            repeat(WIDGET_REFRESH_RETRY_COUNT) { index ->
-                todoRepository.refreshWidgets()
-                if (index < WIDGET_REFRESH_RETRY_COUNT - 1) {
-                    delay(WIDGET_REFRESH_RETRY_DELAY_MS)
-                }
-            }
+            todoRepository.refreshWidgets()
         }
     }
 
@@ -339,8 +333,6 @@ private fun TodayTodoData.toUiState(
 
 private const val EXPORT_PREFS_NAME = "lighttodo_export"
 private const val EXPORT_DIRECTORY_URI_KEY = "export_directory_uri"
-private const val WIDGET_REFRESH_RETRY_COUNT = 3
-private const val WIDGET_REFRESH_RETRY_DELAY_MS = 700L
 private val EXPORT_FILE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss", Locale.CHINA)
 private val TITLE_DATE_FORMATTER = DateTimeFormatter.ofPattern("M月d日", Locale.CHINA)
 private val SECONDARY_DATE_FORMATTER = DateTimeFormatter.ofPattern("EEEE", Locale.CHINA)
