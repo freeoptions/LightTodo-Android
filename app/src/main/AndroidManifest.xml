@@ -35,6 +35,10 @@
         </receiver>
 
         <receiver
+            android:name=".widget.TodoWidgetToggleReceiver"
+            android:exported="false" />
+
+        <receiver
             android:name=".widget.TodoWidgetRefreshReceiver"
             android:exported="true">
             <intent-filter>

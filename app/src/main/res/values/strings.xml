@@ -67,10 +67,11 @@
     <string name="export_open_file_failed">打开导出文件失败</string>
 
     <string name="widget_today">今天</string>
-    <string name="widget_progress">进度 %1$s</string>
     <string name="widget_incomplete">未完成</string>
     <string name="widget_completed">已完成</string>
     <string name="widget_completed_celebration">完成啦</string>
+    <string name="widget_mark_completed">标记为已完成</string>
+    <string name="widget_mark_incomplete">取消完成</string>
     <string name="widget_empty">今天没有任务</string>
     <string name="import_json">导入 JSON</string>
     <string name="import_success">已导入配置</string>

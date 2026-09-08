@@ -104,50 +104,54 @@ class TodoRepositoryTest {
     fun `toggleTodoFromWidget should resolve the clicked todo from the full table`() = runTest {
         val todo = createTodo("1", "Widget task", completed = false)
         coEvery { todoDao.getAll() } returns listOf(todo)
+        coEvery { todoDao.getById("1") } returns todo.copy(completed = true)
 
         val result = repository.toggleTodoFromWidget("1")
 
-        assertTrue(result)
+        assertTrue(result.found)
+        assertFalse(result.completedBefore!!)
+        assertTrue(result.requestedCompleted!!)
+        assertEquals(true, result.persistedCompleted)
         coVerify(exactly = 1) { todoDao.getAll() }
         coVerify(exactly = 0) { todoDao.getRecurrenceCandidates(any()) }
         coVerify(exactly = 1) { todoDao.updateCompletion("1", true, any(), any()) }
     }
 
     @Test
+    fun `toggleTodoFromWidget toggles the current database state`() = runTest {
+        val todo = createTodo("1", "Widget task", completed = true)
+        coEvery { todoDao.getAll() } returns listOf(todo)
+        coEvery { todoDao.getById("1") } returns todo.copy(completed = false)
+
+        val result = repository.toggleTodoFromWidget("1")
+
+        assertTrue(result.found)
+        assertTrue(result.completedBefore!!)
+        assertFalse(result.requestedCompleted!!)
+        assertEquals(false, result.persistedCompleted)
+        coVerify(exactly = 1) { todoDao.updateCompletion("1", false, null, any()) }
+    }
+
+    @Test
     fun `toggleTodoFromWidget reports stale widget rows`() = runTest {
         coEvery { todoDao.getAll() } returns emptyList()
 
-        val result = repository.toggleTodoFromWidget("missing", completed = true)
+        val result = repository.toggleTodoFromWidget("missing")
 
-        assertFalse(result)
+        assertFalse(result.found)
         coVerify(exactly = 0) { todoDao.updateCompletion(any(), any(), any(), any()) }
     }
 
     @Test
-    fun `widget completion uses requested state instead of toggling twice`() = runTest {
-        val todo = createTodo(
-            id = "1",
-            content = "Widget task",
-            completed = true,
-            completedAt = "2026-04-26T09:00:00Z",
-        )
-        coEvery { todoDao.getAll() } returns listOf(todo)
-
-        repository.toggleTodoFromWidget("1", completed = true)
-
-        coVerify(exactly = 0) { todoDao.updateCompletion(any(), any(), any(), any()) }
-        coVerify(exactly = 0) { todoDao.updateCompletions(any(), any(), any(), any()) }
-    }
-
-    @Test
-    fun `widget can clear completed parent subtree using requested state`() = runTest {
+    fun `widget can clear completed parent subtree by toggling`() = runTest {
         val todos = listOf(
             createTodo("1", "Parent", completed = true, completedAt = "2026-04-26T09:00:00Z"),
             createTodo("2", "Child", parentId = "1", completed = true, completedAt = "2026-04-26T09:00:00Z"),
         )
         coEvery { todoDao.getAll() } returns todos
+        coEvery { todoDao.getById("1") } returns todos.first().copy(completed = false)
 
-        repository.toggleTodoFromWidget("1", completed = false)
+        repository.toggleTodoFromWidget("1")
 
         coVerify(exactly = 1) {
             todoDao.updateCompletions(
@@ -273,8 +277,8 @@ class TodoRepositoryTest {
     @Test
     fun `observeToday refreshes when calendar day changes`() = runTest {
         val clock = MutableClock(
-            instant = Instant.parse("2026-05-05T23:59:58Z"),
-            zone = ZoneOffset.UTC,
+            currentInstant = Instant.parse("2026-05-05T23:59:58Z"),
+            currentZone = ZoneOffset.UTC,
         )
         val todosFlow = MutableStateFlow(
             listOf(

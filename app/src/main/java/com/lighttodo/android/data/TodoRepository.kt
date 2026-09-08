@@ -16,6 +16,15 @@ import kotlinx.coroutines.flow.flow
 import org.json.JSONArray
 import org.json.JSONObject
 
+data class WidgetToggleResult(
+    val todoId: String,
+    val found: Boolean,
+    val completedBefore: Boolean? = null,
+    val requestedCompleted: Boolean? = null,
+    val operation: String? = null,
+    val persistedCompleted: Boolean? = null,
+)
+
 @Singleton
 class TodoRepository @Inject constructor(
     private val todoDao: TodoDao,
@@ -145,22 +154,38 @@ class TodoRepository @Inject constructor(
         }
     }
 
-    suspend fun toggleTodoFromWidget(todoId: String, completed: Boolean? = null): Boolean {
+    /**
+     * Toggles a todo from a widget action using the current database state.
+     *
+     * The widget deliberately sends only the business id. This keeps the action independent of
+     * launcher-side optimistic view state and reuses the same subtree/ancestor rules as the app.
+     */
+    suspend fun toggleTodoFromWidget(todoId: String): WidgetToggleResult {
         val targetDate = LocalDate.now(clock)
         val allTodos = todoDao.getAll()
-        val todo = allTodos.firstOrNull { it.id == todoId } ?: return false
+        val todo = allTodos.firstOrNull { it.id == todoId }
+            ?: return WidgetToggleResult(todoId = todoId, found = false)
         val todoById = allTodos.associateBy { it.id }
         val descendantsByParent = allTodos.groupBy { it.parentId }
+        val currentlyCompleted = todo.isCompletedForDate(
+            targetDate = targetDate,
+            repeatMode = todo.completionRepeatMode(todoById),
+        )
+        val targetCompleted = !currentlyCompleted
         val hasChildren = descendantsByParent[todo.id].orEmpty().isNotEmpty()
-        val completionRepeatMode = todo.completionRepeatMode(todoById)
-        val currentlyCompleted = todo.isCompletedForDate(targetDate, completionRepeatMode)
-        val targetCompleted = completed ?: !currentlyCompleted
-
-        if (targetCompleted == currentlyCompleted) {
-            return true
+        val hasUnfinishedChildren = targetCompleted && hasChildren &&
+            hasUnfinishedDescendants(todo.id, descendantsByParent, todoById, targetDate)
+        val operation = if (hasChildren && targetCompleted && hasUnfinishedChildren) {
+            "complete_subtree"
+        } else {
+            "toggle"
         }
 
-        if (hasChildren && targetCompleted && hasUnfinishedDescendants(todo.id, descendantsByParent, todoById, targetDate)) {
+        if (
+            hasChildren &&
+            targetCompleted &&
+            hasUnfinishedChildren
+        ) {
             completeParentSubtreeWithSnapshot(
                 parentId = todoId,
                 allTodos = allTodos,
@@ -174,7 +199,15 @@ class TodoRepository @Inject constructor(
                 targetCompleted = targetCompleted,
             )
         }
-        return true
+        val persistedTodo = todoDao.getById(todoId)
+        return WidgetToggleResult(
+            todoId = todoId,
+            found = true,
+            completedBefore = currentlyCompleted,
+            requestedCompleted = targetCompleted,
+            operation = operation,
+            persistedCompleted = persistedTodo?.completed,
+        )
     }
 
     suspend fun completeParentSubtree(parentId: String, refreshWidgets: Boolean = true) {
@@ -456,12 +489,16 @@ class TodoRepository @Inject constructor(
                     .plusDays(1)
                     .atStartOfDay(clock.zone)
                     .toInstant()
-                val delayMillis = Duration.between(now, nextDayStart).toMillis().coerceAtLeast(1L)
+                val delayMillis = Duration.between(now, nextDayStart)
+                    .toMillis()
+                    .coerceIn(1L, CurrentDatePollIntervalMillis)
                 delay(delayMillis)
             }
         }
             .distinctUntilChanged()
 }
+
+private const val CurrentDatePollIntervalMillis = 60_000L
 
 private fun TodoEntity.toJsonObject(): JSONObject =
     JSONObject()

@@ -5,24 +5,31 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.BroadcastReceiver
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.util.Log
 import android.appwidget.AppWidgetManager
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
+import androidx.glance.Image
+import androidx.glance.ImageProvider
 import androidx.glance.LocalContext
-import androidx.glance.action.ActionParameters
-import androidx.glance.action.actionParametersOf
+import androidx.glance.LocalSize
 import androidx.glance.action.clickable
-import androidx.glance.appwidget.CheckBox
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
-import androidx.glance.appwidget.action.ActionCallback
-import androidx.glance.appwidget.action.ToggleableStateKey
-import androidx.glance.appwidget.action.actionRunCallback
+import androidx.glance.appwidget.SizeMode
+import androidx.glance.appwidget.action.actionSendBroadcast
 import androidx.glance.appwidget.action.actionStartActivity
 import androidx.glance.appwidget.appWidgetBackground
 import androidx.glance.appwidget.cornerRadius
@@ -50,24 +57,33 @@ import com.lighttodo.android.MainActivity as AppMainActivity
 import com.lighttodo.android.R
 import com.lighttodo.android.data.RepeatMode
 import com.lighttodo.android.data.TodayTodoNode
+import com.lighttodo.android.data.TodayTodoData
 import com.lighttodo.android.data.TodoRepository
+import com.lighttodo.android.utils.LunarUtils
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.components.SingletonComponent
 import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.OffsetDateTime
 import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
+import kotlin.math.floor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.collect
 import org.json.JSONArray
 import org.json.JSONObject
 
-private val TodoIdKey = ActionParameters.Key<String>("todo_id")
 private val WidgetBlue = glanceColorProvider(day = Color(0xFF2563EB), night = Color(0xFF2563EB))
 private val WidgetBackground = glanceColorProvider(day = Color(0xFFF8FAFC), night = Color(0xFF0F172A))
 private val RowBackground = glanceColorProvider(day = Color(0xFFFFFFFF), night = Color(0xFFFFFFFF))
@@ -85,57 +101,193 @@ private val CompletedText = glanceColorProvider(day = Color(0xFF166534), night =
 private val OnAccentText = glanceColorProvider(day = Color(0xFFFFFFFF), night = Color(0xFFFFFFFF))
 private val CheckBoxTouchSize = 36.dp
 private val WidgetMutationMutex = Mutex()
+private val WidgetInteractionMutex = Mutex()
+private val WidgetRefreshMutex = Mutex()
+private val WidgetDateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd", Locale.CHINA)
+private val WidgetWeekdayFormatter = DateTimeFormatter.ofPattern("E", Locale.CHINA)
+private const val WidgetHeaderHorizontalPaddingDp = 12f
+private const val WidgetHeaderContentGapDp = 8f
+private const val WidgetHeaderMinFontSp = 10f
+private const val WidgetHeaderMaxFontSp = 18f
+private const val WidgetCompletionSinkDelayMillis = 3_000L
+private const val WidgetCompletionSinkExpiryAction = "com.lighttodo.android.widget.action.COMPLETION_SINK_EXPIRY"
+private const val WidgetToggleTodoAction = "com.lighttodo.android.widget.action.TOGGLE_TODO"
+private const val WidgetToggleTodoIdExtra = "todo_id"
+private const val WidgetToggleTodoUriPrefix = "lighttodo://widget/toggle/"
 
 class TodoWidget : GlanceAppWidget() {
+    override val sizeMode: SizeMode = SizeMode.Exact
+
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        val snapshot = loadWidgetSnapshot(context.applicationContext)
+        val appContext = context.applicationContext
+        val currentDate = LocalDate.now(ZoneId.systemDefault())
+        Log.d(WidgetLogTag, "render:start glanceId=$id date=$currentDate")
+        val repository = widgetRepository(appContext)
+        val snapshot = loadWidgetSnapshot(appContext, currentDate, repository)
+        Log.d(WidgetLogTag, "render:content glanceId=$id ${snapshot.logSummary()}")
 
         provideContent {
+            var currentSnapshot by remember { mutableStateOf(snapshot) }
+            var nowMillis by remember { mutableStateOf(System.currentTimeMillis()) }
+
+            // Glance may keep this composition alive after updateAll() returns. Observe Room
+            // inside the composition so a checkbox action changes the already-mounted widget,
+            // instead of relying on provideGlance() being invoked again.
+            repository?.let { todoRepository ->
+                LaunchedEffect(todoRepository) {
+                    Log.d(WidgetLogTag, "flow:start glanceId=$id")
+                    todoRepository.observeToday()
+                        .catch { error ->
+                            Log.e(WidgetLogTag, "桌面小组件观察待办数据失败", error)
+                        }
+                        .collect { todayData ->
+                            val nextSnapshot = todayData.toWidgetSnapshot()
+                            Log.d(
+                                WidgetLogTag,
+                                "flow:emit glanceId=$id ${nextSnapshot.logSummary()}",
+                            )
+                            TodoWidgetCache.write(appContext, nextSnapshot)
+                            scheduleCompletionSinkRefresh(appContext, nextSnapshot.rows)
+                            currentSnapshot = nextSnapshot
+                        }
+                }
+            }
+
+            LaunchedEffect(currentSnapshot.rows) {
+                // updateAll() cannot reliably restart an already-running Glance composition.
+                // Keep the three-second sink transition observable here as well, so it still
+                // happens when no second checkbox action or external refresh occurs.
+                while (true) {
+                    val nextExpiryMillis = currentSnapshot.rows
+                        .asSequence()
+                        .filter { row -> row.completed }
+                        .mapNotNull { row ->
+                            completionTimestampMillis(row.completedAt)
+                                ?.plus(WidgetCompletionSinkDelayMillis)
+                        }
+                        .filter { expiryMillis -> expiryMillis > System.currentTimeMillis() }
+                        .minOrNull()
+                        ?: return@LaunchedEffect
+                    delay((nextExpiryMillis - System.currentTimeMillis()).coerceAtLeast(1L))
+                    nowMillis = System.currentTimeMillis()
+                }
+            }
+
             TodoWidgetContent(
-                rows = snapshot.rows,
-                progressLabel = snapshot.progressLabel,
+                snapshot = currentSnapshot,
+                nowMillis = nowMillis,
             )
         }
     }
 }
 
-private suspend fun loadWidgetSnapshot(context: Context): TodoWidgetSnapshot {
-    val cachedSnapshot = TodoWidgetCache.read(context)
-    val shouldReload = cachedSnapshot == null || TodoWidgetCache.isReloadRequested(context)
-    if (!shouldReload) {
-        return cachedSnapshot
-    }
-
-    val freshSnapshot = runCatching {
-        val entryPoint = EntryPointAccessors.fromApplication(context, TodoWidgetEntryPoint::class.java)
-        val todoRepository = entryPoint.todoRepository()
-        withContext(Dispatchers.IO) { todoRepository.getTodayDataSnapshot() }
-    }.map { todayData ->
-        TodoWidgetSnapshot(
-            rows = buildWidgetRowsFromNodes(todayData.tree),
-            progressLabel = "${todayData.completedCount}/${todayData.totalCount}",
-        ).withCelebration(TodoWidgetCache.activeCelebrationTodoId(context))
+private fun widgetRepository(context: Context): TodoRepository? =
+    runCatching {
+        EntryPointAccessors.fromApplication(context, TodoWidgetEntryPoint::class.java)
+            .todoRepository()
+    }.onFailure { error ->
+        Log.e(WidgetLogTag, "桌面小组件获取待办仓库失败", error)
     }.getOrNull()
 
+private suspend fun loadWidgetSnapshot(
+    context: Context,
+    currentDate: LocalDate,
+    repository: TodoRepository?,
+): TodoWidgetSnapshot {
+    // Room is the source of truth for every render. The cache is intentionally only a
+    // failure fallback: a launcher can apply a checkbox change optimistically while an
+    // older RemoteViews render is still in flight, and reusing that cache would restore
+    // the previous checked state.
+    val cachedSnapshot = TodoWidgetCache.read(context)
+    Log.d(
+        WidgetLogTag,
+        "snapshot:start date=$currentDate cache=${cachedSnapshot?.logSummary() ?: "none"}",
+    )
+    val freshSnapshot = WidgetMutationMutex.withLock {
+        runCatching {
+            val todoRepository = checkNotNull(repository) { "TodoRepository unavailable" }
+            withContext(Dispatchers.IO) { todoRepository.getTodayDataSnapshot() }
+        }.map { todayData ->
+            todayData.toWidgetSnapshot()
+        }.onSuccess { snapshot ->
+            Log.d(WidgetLogTag, "snapshot:room ${snapshot.logSummary()}")
+        }.onFailure { error ->
+            Log.e(WidgetLogTag, "桌面小组件读取今日待办失败", error)
+        }.getOrNull()?.also { snapshot ->
+            // Keep cache publication in the same critical section as the Room read so an
+            // older render cannot overwrite the snapshot produced after a checkbox action.
+            TodoWidgetCache.write(context, snapshot)
+        }
+    }
+
     if (freshSnapshot != null) {
-        TodoWidgetCache.write(context, freshSnapshot)
-        TodoWidgetCache.setReloadRequested(context, false)
+        scheduleCompletionSinkRefresh(context, freshSnapshot.rows)
         return freshSnapshot
     }
 
-    return cachedSnapshot ?: TodoWidgetSnapshot.Empty
+    val fallbackSnapshot = cachedSnapshot
+        ?.takeIf { snapshot -> snapshot.snapshotDate == currentDate }
+        ?: TodoWidgetSnapshot.empty(currentDate)
+    Log.w(WidgetLogTag, "snapshot:fallback ${fallbackSnapshot.logSummary()}")
+    scheduleCompletionSinkRefresh(context, fallbackSnapshot.rows)
+    return fallbackSnapshot
+}
+
+private fun TodayTodoData.toWidgetSnapshot(): TodoWidgetSnapshot =
+    TodoWidgetSnapshot(
+        rows = buildWidgetRowsFromNodes(tree),
+        progressLabel = "$completedCount/$totalCount",
+        snapshotDate = date,
+    )
+
+private fun TodoWidgetSnapshot.logSummary(): String =
+    "date=$snapshotDate rows=${rows.size} progress=$progressLabel states=${rows.joinToString(",") { row ->
+        "${row.todoId}=${if (row.completed) "done" else "open"}"
+    }}"
+
+internal fun sortWidgetRows(
+    rows: List<TodoWidgetRow>,
+    nowMillis: Long,
+): List<TodoWidgetRow> =
+    rows
+        .map { row -> row.copy(celebrating = isWidgetCompletionPending(row, nowMillis)) }
+        .sortedWith(
+            compareBy<TodoWidgetRow> { it.completed && !it.celebrating }
+                .thenBy { it.sortIndex },
+        )
+
+internal fun isWidgetCompletionPending(row: TodoWidgetRow, nowMillis: Long): Boolean {
+    if (!row.completed) {
+        return false
+    }
+    val completedAtMillis = completionTimestampMillis(row.completedAt) ?: return false
+    val elapsedMillis = nowMillis - completedAtMillis
+    return elapsedMillis in 0L until WidgetCompletionSinkDelayMillis
+}
+
+private fun completionTimestampMillis(completedAt: String?): Long? {
+    if (completedAt.isNullOrBlank()) {
+        return null
+    }
+    return runCatching { OffsetDateTime.parse(completedAt).toInstant().toEpochMilli() }.getOrNull()
+        ?: runCatching {
+            LocalDateTime.parse(completedAt)
+                .atZone(ZoneId.systemDefault())
+                .toInstant()
+                .toEpochMilli()
+        }.getOrNull()
 }
 
 @Composable
 private fun TodoWidgetContent(
-    rows: List<TodoWidgetRow>,
-    progressLabel: String,
+    snapshot: TodoWidgetSnapshot,
+    nowMillis: Long,
 ) {
     val context = LocalContext.current
-    val sortedRows = rows.sortedWith(
-        compareBy<TodoWidgetRow> { it.completed && !it.celebrating }
-            .thenBy { it.sortIndex },
-    )
+    val rows = snapshot.rows
+    val sortedRows = sortWidgetRows(rows, nowMillis)
+    val solarDateLabel = formatWidgetSolarDate(snapshot.snapshotDate)
+    val lunarDateLabel = LunarUtils.getLunarInfo(snapshot.snapshotDate)
 
     LazyColumn(
         modifier = GlanceModifier
@@ -146,8 +298,9 @@ private fun TodoWidgetContent(
     ) {
         item(itemId = -3L) {
             WidgetHeader(
-                title = context.getString(R.string.widget_today),
-                progressText = context.getString(R.string.widget_progress, progressLabel),
+                solarDateLabel = solarDateLabel,
+                lunarDateLabel = lunarDateLabel,
+                progressText = snapshot.progressLabel,
             )
         }
 
@@ -157,16 +310,22 @@ private fun TodoWidgetContent(
                     text = context.getString(R.string.widget_empty),
                     modifier = GlanceModifier
                         .fillMaxWidth()
-                        .clickable(actionRunCallback<ConsumeWidgetTouchAction>())
                         .padding(16.dp),
                 )
             }
         } else {
             items(
                 items = sortedRows,
+                // Keep the RemoteViews collection identity attached to the logical todo.
+                // The row can move when its completion state changes, but its action must still
+                // carry the same business id after the reorder.
                 itemId = { row -> row.stableItemId() },
             ) { row ->
-                TodoWidgetRowItem(row = row)
+                // Keep the composed row identity tied to the business id while the visible
+                // position changes after the three-second completion window.
+                key(row.todoId) {
+                    TodoWidgetRowItem(row = row)
+                }
             }
         }
     }
@@ -174,34 +333,78 @@ private fun TodoWidgetContent(
 
 @Composable
 private fun WidgetHeader(
-    title: String,
+    solarDateLabel: String,
+    lunarDateLabel: String,
     progressText: String,
 ) {
+    val dateText = "$solarDateLabel · $lunarDateLabel"
+    val headerFontSize = calculateWidgetHeaderFontSize(
+        widgetWidthDp = LocalSize.current.width.value,
+        dateText = dateText,
+        progressText = progressText,
+    )
+
     Row(
         modifier = GlanceModifier
             .fillMaxWidth()
             .clickable(actionStartActivity(appLaunchIntent(LocalContext.current)))
             .background(WidgetBlue)
-            .padding(horizontal = 16.dp, vertical = 14.dp),
+            .padding(horizontal = WidgetHeaderHorizontalPaddingDp.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalAlignment = Alignment.Start,
     ) {
         Text(
-            text = title,
+            text = dateText,
             modifier = GlanceModifier.defaultWeight(),
             style = TextStyle(
                 color = OnAccentText,
-                fontWeight = FontWeight.Bold,
+                fontWeight = FontWeight.Medium,
+                fontSize = headerFontSize.sp,
             ),
+            maxLines = 1,
         )
+        Spacer(modifier = GlanceModifier.width(WidgetHeaderContentGapDp.dp))
         Text(
             text = progressText,
             style = TextStyle(
                 color = OnAccentText,
-                fontWeight = FontWeight.Medium,
+                fontWeight = FontWeight.Bold,
+                fontSize = headerFontSize.sp,
             ),
+            maxLines = 1,
         )
     }
+}
+
+internal fun formatWidgetSolarDate(date: LocalDate): String =
+    "${date.format(WidgetDateFormatter)} · ${date.format(WidgetWeekdayFormatter)}"
+
+internal fun calculateWidgetHeaderFontSize(
+    widgetWidthDp: Float,
+    dateText: String,
+    progressText: String,
+): Float {
+    val availableTextWidth = (
+        widgetWidthDp -
+            WidgetHeaderHorizontalPaddingDp * 2f -
+            WidgetHeaderContentGapDp
+        ).coerceAtLeast(1f)
+    val estimatedTextUnits = (dateText + progressText)
+        .sumOf { character -> character.estimatedWidthUnits().toDouble() }
+        .toFloat()
+        .coerceAtLeast(1f)
+    val fittedSize = availableTextWidth / estimatedTextUnits
+    return (floor(fittedSize * 2f) / 2f)
+        .coerceIn(WidgetHeaderMinFontSp, WidgetHeaderMaxFontSp)
+}
+
+private fun Char.estimatedWidthUnits(): Float = when {
+    isWhitespace() -> 0.30f
+    this == '·' -> 0.50f
+    this == '-' -> 0.45f
+    this == '/' -> 0.55f
+    code <= 0x7F -> 0.58f
+    else -> 1f
 }
 
 private fun appLaunchIntent(context: Context): Intent =
@@ -217,7 +420,6 @@ private fun TodoWidgetRowItem(row: TodoWidgetRow) {
     Row(
         modifier = GlanceModifier
             .fillMaxWidth()
-            .clickable(actionRunCallback<ConsumeWidgetTouchAction>())
             .background(
                 when {
                     row.celebrating -> CelebratingRowBackground
@@ -229,7 +431,10 @@ private fun TodoWidgetRowItem(row: TodoWidgetRow) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalAlignment = Alignment.Start,
     ) {
-        WidgetCheckBox(checked = row.completed, todoId = row.todoId)
+        WidgetCheckBox(
+            checked = row.completed,
+            todoId = row.todoId,
+        )
         Spacer(modifier = GlanceModifier.width(10.dp))
         Column(modifier = GlanceModifier.defaultWeight()) {
             Text(
@@ -246,23 +451,31 @@ private fun TodoWidgetRowItem(row: TodoWidgetRow) {
 }
 
 @Composable
-private fun WidgetCheckBox(checked: Boolean, todoId: String) {
+private fun WidgetCheckBox(
+    checked: Boolean,
+    todoId: String,
+) {
+    val context = LocalContext.current
+    Log.d(WidgetLogTag, "render:checkbox todoId=$todoId checked=$checked")
     Box(
         modifier = GlanceModifier
             .width(CheckBoxTouchSize)
-            .height(CheckBoxTouchSize),
+            .height(CheckBoxTouchSize)
+            .clickable(
+                actionSendBroadcast(todoToggleIntent(context, todoId)),
+            )
+            .padding(6.dp),
         contentAlignment = Alignment.Center,
     ) {
-        CheckBox(
-            checked = checked,
-            onCheckedChange =
-                actionRunCallback<ToggleTodoAction>(
-                    actionParametersOf(TodoIdKey to todoId),
-                ),
+        Image(
+            provider = ImageProvider(
+                if (checked) R.drawable.ic_widget_todo_checked else R.drawable.ic_widget_todo_unchecked,
+            ),
+            contentDescription = context.getString(
+                if (checked) R.string.widget_mark_incomplete else R.string.widget_mark_completed,
+            ),
             modifier = GlanceModifier
-                .width(CheckBoxTouchSize)
-                .height(CheckBoxTouchSize),
-            text = "",
+                .fillMaxSize(),
         )
     }
 }
@@ -337,61 +550,108 @@ private fun WidgetChip(
     }
 }
 
-class ToggleTodoAction : ActionCallback {
-    override suspend fun onAction(
-        context: Context,
-        glanceId: GlanceId,
-        parameters: ActionParameters,
-    ) {
-        val todoId = parameters[TodoIdKey] ?: return
-        val appContext = context.applicationContext
-        val requestedCompleted = parameters[ToggleableStateKey]
-            ?: TodoWidgetCache.read(appContext)
-                ?.rows
-                ?.firstOrNull { row -> row.todoId == todoId }
-                ?.completed
-                ?.not()
-            ?: return
-
-        val persistenceResult = withContext(Dispatchers.IO) {
-            WidgetMutationMutex.withLock {
-                val entryPoint = EntryPointAccessors.fromApplication(appContext, TodoWidgetEntryPoint::class.java)
-                val todoRepository = entryPoint.todoRepository()
-                runCatching {
-                    todoRepository.toggleTodoFromWidget(
-                        todoId = todoId,
-                        completed = requestedCompleted,
-                    )
-                }
-            }
-        }
-        persistenceResult.exceptionOrNull()?.let { error ->
-            Log.e(WidgetLogTag, "桌面小组件更新待办状态失败：$todoId", error)
-        }
-        if (persistenceResult.getOrNull() == false) {
-            Log.w(WidgetLogTag, "桌面小组件中的待办已不存在：$todoId")
-        }
-
-        TodoWidgetCache.clearCelebration(appContext, todoId)
-        TodoWidgetUpdater.refreshAfterInteraction(
-            context = appContext,
-            glanceId = glanceId,
-            forceDataReload = true,
-        )
-    }
+private fun todoToggleIntent(context: Context, todoId: String): Intent {
+    val intent = Intent(context, TodoWidgetToggleReceiver::class.java)
+        .setAction(WidgetToggleTodoAction)
+        // Intent.filterEquals includes data URI. This makes every checkbox's PendingIntent
+        // distinct even if a launcher reuses the same RemoteViews click slot.
+        .setData(Uri.parse("$WidgetToggleTodoUriPrefix${Uri.encode(todoId)}"))
+        .putExtra(WidgetToggleTodoIdExtra, todoId)
+        .setPackage(context.packageName)
+    Log.d(WidgetLogTag, "render:action todoId=$todoId data=${intent.dataString}")
+    return intent
 }
 
-class ConsumeWidgetTouchAction : ActionCallback {
-    override suspend fun onAction(
-        context: Context,
-        glanceId: GlanceId,
-        parameters: ActionParameters,
-    ) = Unit
+class TodoWidgetToggleReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        Log.i(
+            WidgetLogTag,
+            "toggle:received action=${intent.action} component=${intent.component} " +
+                "data=${intent.dataString} extras=${intent.extras?.keySet()?.joinToString() ?: "none"}",
+        )
+        if (intent.action != WidgetToggleTodoAction) {
+            Log.w(WidgetLogTag, "toggle:ignored reason=unexpected_action")
+            return
+        }
+        val todoId = intent.getStringExtra(WidgetToggleTodoIdExtra)
+            ?.takeIf { it.isNotBlank() }
+            ?: intent.data
+            ?.takeIf { uri -> uri.scheme == "lighttodo" && uri.host == "widget" }
+            ?.pathSegments
+            ?.takeIf { segments -> segments.size == 2 && segments[0] == "toggle" }
+            ?.get(1)
+            ?.takeIf { it.isNotBlank() }
+        if (todoId == null) {
+            Log.e(WidgetLogTag, "toggle:rejected reason=missing_or_invalid_todo_id")
+            return
+        }
+
+        val appContext = context.applicationContext
+        Log.i(WidgetLogTag, "toggle:accepted todoId=$todoId")
+        val pendingResult = goAsync()
+        CoroutineScope(SupervisorJob() + Dispatchers.Default).launch {
+            try {
+                WidgetInteractionMutex.withLock {
+                    Log.d(WidgetLogTag, "toggle:queue_enter todoId=$todoId")
+                    val persistenceResult = withContext(Dispatchers.IO) {
+                        WidgetMutationMutex.withLock {
+                            Log.d(WidgetLogTag, "toggle:room_begin todoId=$todoId")
+                            runCatching {
+                                val entryPoint = EntryPointAccessors.fromApplication(
+                                    appContext,
+                                    TodoWidgetEntryPoint::class.java,
+                                )
+                                val todoRepository = entryPoint.todoRepository()
+                                todoRepository.toggleTodoFromWidget(todoId)
+                            }
+                        }
+                    }
+                    Log.d(
+                        WidgetLogTag,
+                        "toggle:room_end todoId=$todoId result=" +
+                            persistenceResult.fold(
+                                onSuccess = { result ->
+                                    if (result.found) {
+                                        "found before=${result.completedBefore} " +
+                                            "target=${result.requestedCompleted} " +
+                                            "after=${result.persistedCompleted} operation=${result.operation}"
+                                    } else {
+                                        "missing"
+                                    }
+                                },
+                                onFailure = { error -> "error:${error.javaClass.simpleName}" },
+                            ),
+                    )
+                    persistenceResult.exceptionOrNull()?.let { error ->
+                        Log.e(WidgetLogTag, "桌面小组件更新待办状态失败：$todoId", error)
+                    }
+                    if (persistenceResult.isSuccess && persistenceResult.getOrNull()?.found == false) {
+                        Log.w(WidgetLogTag, "桌面小组件中的待办已不存在：$todoId")
+                    }
+                    // A raw broadcast has no GlanceId. Refreshing all instances is deliberate:
+                    // every instance reads Room, so no instance can retain the old checkbox.
+                    Log.d(WidgetLogTag, "toggle:refresh_begin todoId=$todoId")
+                    TodoWidgetUpdater.refreshAll(appContext)
+                    Log.d(WidgetLogTag, "toggle:refresh_end todoId=$todoId")
+                }
+            } catch (error: Throwable) {
+                Log.e(WidgetLogTag, "toggle:uncaught todoId=$todoId", error)
+            } finally {
+                Log.d(WidgetLogTag, "toggle:finish todoId=$todoId")
+                pendingResult.finish()
+            }
+        }
+    }
 }
 
 class TodoWidgetRefreshReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        Log.d(
+            WidgetLogTag,
+            "refresh:received action=${intent.action} data=${intent.dataString ?: "none"}",
+        )
         if (intent.action !in WidgetRefreshActions) {
+            Log.w(WidgetLogTag, "refresh:ignored reason=unexpected_action")
             return
         }
 
@@ -411,6 +671,7 @@ class TodoWidgetReceiver : GlanceAppWidgetReceiver() {
 
     override fun onEnabled(context: Context) {
         super.onEnabled(context)
+        Log.d(WidgetLogTag, "receiver:enabled")
         scheduleNextDailyRefresh(context.applicationContext)
     }
 
@@ -419,6 +680,7 @@ class TodoWidgetReceiver : GlanceAppWidgetReceiver() {
         appWidgetManager: AppWidgetManager,
         appWidgetIds: IntArray,
     ) {
+        Log.d(WidgetLogTag, "receiver:update count=${appWidgetIds.size}")
         scheduleNextDailyRefresh(context.applicationContext)
         super.onUpdate(context, appWidgetManager, appWidgetIds)
     }
@@ -432,18 +694,21 @@ internal data class TodoWidgetRow(
     val depth: Int,
     val repeatMode: RepeatMode,
     val sortIndex: Int,
+    val completedAt: String? = null,
     val celebrating: Boolean = false,
 )
 
 internal data class TodoWidgetSnapshot(
     val rows: List<TodoWidgetRow>,
     val progressLabel: String,
+    val snapshotDate: LocalDate,
 ) {
-    fun withCelebration(todoId: String?): TodoWidgetSnapshot =
-        copy(rows = rows.map { row -> row.copy(celebrating = todoId != null && row.todoId == todoId) })
-
     companion object {
-        val Empty = TodoWidgetSnapshot(rows = emptyList(), progressLabel = "0/0")
+        fun empty(date: LocalDate) = TodoWidgetSnapshot(
+            rows = emptyList(),
+            progressLabel = "0/0",
+            snapshotDate = date,
+        )
     }
 }
 
@@ -464,6 +729,7 @@ internal fun buildWidgetRowsFromNodes(
                     todoId = node.todo.id,
                     title = node.todo.content,
                     completed = node.todo.completed,
+                    completedAt = node.todo.completedAt,
                     hasChildren = node.children.isNotEmpty(),
                     depth = depth,
                     repeatMode = RepeatMode.fromValue(node.todo.repeatMode),
@@ -488,28 +754,90 @@ interface TodoWidgetEntryPoint {
 
 object TodoWidgetUpdater {
     suspend fun refreshAll(context: Context) {
-        val appContext = context.applicationContext
-        scheduleNextDailyRefresh(appContext)
-        TodoWidgetCache.setReloadRequested(appContext, true)
-        runCatching {
-            TodoWidget().updateAll(appContext)
+        WidgetRefreshMutex.withLock {
+            val appContext = context.applicationContext
+            Log.d(WidgetLogTag, "refresh:begin")
+            scheduleNextDailyRefresh(appContext)
+            runCatching { TodoWidget().updateAll(appContext) }
+                .onSuccess { Log.d(WidgetLogTag, "refresh:update_all_success") }
+                .onFailure { error ->
+                    Log.e(WidgetLogTag, "桌面小组件刷新失败", error)
+                }
+            Log.d(WidgetLogTag, "refresh:end")
         }
     }
 
-    suspend fun refreshAfterInteraction(
-        context: Context,
-        glanceId: GlanceId,
-        forceDataReload: Boolean = false,
-    ) {
-        val appContext = context.applicationContext
-        if (forceDataReload) {
-            TodoWidgetCache.setReloadRequested(appContext, true)
+}
+
+private fun scheduleCompletionSinkRefresh(
+    context: Context,
+    rows: List<TodoWidgetRow>,
+) {
+    val nowMillis = System.currentTimeMillis()
+    var pendingCount = 0
+    rows.forEach { row ->
+        if (!isWidgetCompletionPending(row, nowMillis)) {
+            return@forEach
         }
-        runCatching {
-            TodoWidget().update(appContext, glanceId)
-        }
+        val completedAtMillis = completionTimestampMillis(row.completedAt) ?: return@forEach
+        pendingCount++
+        scheduleCompletionSinkExpiry(
+            context = context,
+            todoId = row.todoId,
+            triggerAtMillis = completedAtMillis + WidgetCompletionSinkDelayMillis,
+        )
+    }
+    if (pendingCount > 0) {
+        Log.d(WidgetLogTag, "sink:scheduled count=$pendingCount")
     }
 }
+
+private fun scheduleCompletionSinkExpiry(
+    context: Context,
+    todoId: String,
+    triggerAtMillis: Long,
+) {
+    val alarmManager = context.getSystemService(AlarmManager::class.java) ?: return
+    val pendingIntent = completionSinkPendingIntent(context, todoId)
+
+    runCatching {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            runCatching {
+                alarmManager.setExactAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP,
+                    triggerAtMillis,
+                    pendingIntent,
+                )
+            }.getOrElse {
+                alarmManager.setAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP,
+                    triggerAtMillis,
+                    pendingIntent,
+                )
+            }
+        } else {
+            alarmManager.setExact(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
+        }
+    }.onSuccess {
+        Log.d(
+            WidgetLogTag,
+            "sink:alarm_set todoId=$todoId inMs=${(triggerAtMillis - System.currentTimeMillis()).coerceAtLeast(0L)}",
+        )
+    }.onFailure { error ->
+        Log.e(WidgetLogTag, "完成任务延迟下沉刷新失败：$todoId", error)
+    }
+}
+
+private fun completionSinkPendingIntent(context: Context, todoId: String): PendingIntent =
+    PendingIntent.getBroadcast(
+        context,
+        todoId.hashCode(),
+        Intent(context, TodoWidgetRefreshReceiver::class.java)
+            .setAction(WidgetCompletionSinkExpiryAction)
+            .setData(Uri.parse("lighttodo://widget/completion/${Uri.encode(todoId)}"))
+            .setPackage(context.packageName),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
 
 private fun scheduleNextDailyRefresh(context: Context) {
     val alarmManager = context.getSystemService(AlarmManager::class.java) ?: return
@@ -542,6 +870,7 @@ private fun scheduleNextDailyRefresh(context: Context) {
 
 private val WidgetRefreshActions = setOf(
     WidgetDailyRefreshAction,
+    WidgetCompletionSinkExpiryAction,
     Intent.ACTION_MY_PACKAGE_REPLACED,
     Intent.ACTION_TIME_CHANGED,
     Intent.ACTION_TIMEZONE_CHANGED,
@@ -555,66 +884,36 @@ private object TodoWidgetCache {
     private const val PreferencesName = "lighttodo_widget_cache"
     private const val RowsKey = "rows"
     private const val ProgressLabelKey = "progress_label"
-    private const val CelebrationTodoIdKey = "celebration_todo_id"
-    private const val CelebrationExpiresAtKey = "celebration_expires_at"
-    private const val ReloadRequestedKey = "reload_requested"
+    private const val SnapshotDateKey = "snapshot_date"
     private var memorySnapshot: TodoWidgetSnapshot? = null
 
     @Synchronized
     fun read(context: Context): TodoWidgetSnapshot? {
-        memorySnapshot?.let { snapshot ->
-            return snapshot.withCelebration(activeCelebrationTodoId(context))
-        }
+        memorySnapshot?.let { snapshot -> return snapshot }
 
         val preferences = context.getSharedPreferences(PreferencesName, Context.MODE_PRIVATE)
         val rowsJson = preferences.getString(RowsKey, null) ?: return null
+        val snapshotDate = preferences.getString(SnapshotDateKey, null)
+            ?.let { value -> runCatching { LocalDate.parse(value) }.getOrNull() }
+            ?: return null
         val rows = runCatching { rowsFromJson(rowsJson) }.getOrNull() ?: return null
         val progressLabel = preferences.getString(ProgressLabelKey, null) ?: progressLabelForRows(rows)
-        return TodoWidgetSnapshot(rows = rows, progressLabel = progressLabel)
+        return TodoWidgetSnapshot(
+            rows = rows,
+            progressLabel = progressLabel,
+            snapshotDate = snapshotDate,
+        )
             .also { memorySnapshot = it }
-            .withCelebration(activeCelebrationTodoId(context))
     }
 
     @Synchronized
     fun write(context: Context, snapshot: TodoWidgetSnapshot) {
-        val snapshotWithoutCelebration = snapshot.withCelebration(null)
-        memorySnapshot = snapshotWithoutCelebration
+        memorySnapshot = snapshot
         context.getSharedPreferences(PreferencesName, Context.MODE_PRIVATE)
             .edit()
-            .putString(RowsKey, rowsToJson(snapshotWithoutCelebration.rows))
-            .putString(ProgressLabelKey, snapshotWithoutCelebration.progressLabel)
-            .apply()
-    }
-
-    @Synchronized
-    fun clearCelebration(context: Context, todoId: String): Boolean {
-        val preferences = context.getSharedPreferences(PreferencesName, Context.MODE_PRIVATE)
-        if (preferences.getString(CelebrationTodoIdKey, null) != todoId) {
-            return false
-        }
-
-        preferences.edit()
-            .remove(CelebrationTodoIdKey)
-            .remove(CelebrationExpiresAtKey)
-            .apply()
-        return true
-    }
-
-    fun activeCelebrationTodoId(context: Context): String? {
-        val preferences = context.getSharedPreferences(PreferencesName, Context.MODE_PRIVATE)
-        val todoId = preferences.getString(CelebrationTodoIdKey, null) ?: return null
-        val expiresAt = preferences.getLong(CelebrationExpiresAtKey, 0L)
-        return todoId.takeIf { expiresAt > System.currentTimeMillis() }
-    }
-
-    fun isReloadRequested(context: Context): Boolean =
-        context.getSharedPreferences(PreferencesName, Context.MODE_PRIVATE)
-            .getBoolean(ReloadRequestedKey, false)
-
-    fun setReloadRequested(context: Context, requested: Boolean) {
-        context.getSharedPreferences(PreferencesName, Context.MODE_PRIVATE)
-            .edit()
-            .putBoolean(ReloadRequestedKey, requested)
+            .putString(RowsKey, rowsToJson(snapshot.rows))
+            .putString(ProgressLabelKey, snapshot.progressLabel)
+            .putString(SnapshotDateKey, snapshot.snapshotDate.toString())
             .apply()
     }
 
@@ -626,6 +925,7 @@ private object TodoWidgetCache {
                         .put("todoId", row.todoId)
                         .put("title", row.title)
                         .put("completed", row.completed)
+                        .put("completedAt", row.completedAt)
                         .put("hasChildren", row.hasChildren)
                         .put("depth", row.depth)
                         .put("repeatMode", row.repeatMode.value)
@@ -644,6 +944,7 @@ private object TodoWidgetCache {
                         todoId = item.getString("todoId"),
                         title = item.getString("title"),
                         completed = item.getBoolean("completed"),
+                        completedAt = item.optString("completedAt").takeIf { it.isNotBlank() },
                         hasChildren = item.getBoolean("hasChildren"),
                         depth = item.getInt("depth"),
                         repeatMode = RepeatMode.fromValue(item.getString("repeatMode")),
