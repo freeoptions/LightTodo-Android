@@ -44,7 +44,20 @@ class TodoRepositoryTest {
         assertTrue(result.tree.any { it.todo.id == "1" })
         assertTrue(result.tree.any { it.todo.id == "3" })
         assertFalse(result.tree.any { it.todo.id == "2" })
+        assertTrue(result.disabledTree.any { it.todo.id == "2" })
         assertFalse(result.tree.any { it.todo.id == "4" })
+    }
+
+    @Test
+    fun `toggleTodoDisabled persists the opposite state`() = runTest {
+        val todo = createTodo("1", "Daily task", disabled = false)
+        coEvery { todoDao.getById("1") } returns todo
+
+        repository.toggleTodoDisabled("1")
+
+        coVerify(exactly = 1) {
+            todoDao.updateDisabled("1", true, any())
+        }
     }
 
     @Test

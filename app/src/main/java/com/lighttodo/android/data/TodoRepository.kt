@@ -154,6 +154,16 @@ class TodoRepository @Inject constructor(
         }
     }
 
+    suspend fun toggleTodoDisabled(todoId: String) {
+        val todo = todoDao.getById(todoId) ?: return
+        todoDao.updateDisabled(
+            id = todo.id,
+            disabled = !todo.disabled,
+            updatedAt = nowTimestamp(),
+        )
+        widgetRefresher.refreshAll()
+    }
+
     /**
      * Toggles a todo from a widget action using the current database state.
      *
@@ -248,6 +258,17 @@ class TodoRepository @Inject constructor(
             .orEmpty()
             .map { todo -> todo.toTreeNode(nodesByParent).deriveParentCompletion() }
 
+        val disabledTodos = todos
+            .filter { it.disabled }
+            .map { it.copy(completed = false, completedAt = null) }
+        val disabledIds = disabledTodos.map { it.id }.toSet()
+        val disabledNodesByParent = disabledTodos
+            .filter { it.parentId == null || it.parentId in disabledIds }
+            .groupBy { it.parentId }
+        val disabledTree = disabledNodesByParent[null]
+            .orEmpty()
+            .map { todo -> todo.toTreeNode(disabledNodesByParent) }
+
         val progressItems = collectProgressItems(tree)
         val totalCount = progressItems.size
         val completedCount = progressItems.count { it.todo.completed }
@@ -255,6 +276,7 @@ class TodoRepository @Inject constructor(
         return TodayTodoData(
             date = targetDate,
             tree = tree,
+            disabledTree = disabledTree,
             totalCount = totalCount,
             completedCount = completedCount,
             progress = if (totalCount == 0) 0f else completedCount.toFloat() / totalCount.toFloat(),
@@ -559,6 +581,7 @@ private fun JSONObject.optNullableInt(name: String): Int? =
 data class TodayTodoData(
     val date: LocalDate,
     val tree: List<TodayTodoNode>,
+    val disabledTree: List<TodayTodoNode> = emptyList(),
     val totalCount: Int,
     val completedCount: Int,
     val progress: Float,
@@ -578,7 +601,7 @@ data class TodayTodoData(
             return null
         }
 
-        return search(tree)
+        return search(tree) ?: search(disabledTree)
     }
 }
 

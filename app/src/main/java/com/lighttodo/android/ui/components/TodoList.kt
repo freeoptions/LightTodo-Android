@@ -14,6 +14,7 @@ fun androidx.compose.foundation.lazy.LazyListScope.TodoList(
     onExpandToggle: (String) -> Unit,
     onTodoClick: (String) -> Unit,
     onCheckedChange: (String) -> Unit,
+    onDisabledChange: (String) -> Unit,
 ) {
     val visibleRows = buildVisibleRows(nodes = nodes, isExpanded = isExpanded)
 
@@ -27,6 +28,7 @@ fun androidx.compose.foundation.lazy.LazyListScope.TodoList(
             onExpandToggle = onExpandToggle,
             onTodoClick = onTodoClick,
             onCheckedChange = onCheckedChange,
+            onDisabledChange = onDisabledChange,
         )
     }
 }
@@ -38,6 +40,7 @@ private fun LazyItemScope.TodoRowItem(
     onExpandToggle: (String) -> Unit,
     onTodoClick: (String) -> Unit,
     onCheckedChange: (String) -> Unit,
+    onDisabledChange: (String) -> Unit,
 ) {
     TodoItem(
         node = row.node,
@@ -46,6 +49,7 @@ private fun LazyItemScope.TodoRowItem(
         onExpandToggle = onExpandToggle,
         onClick = onTodoClick,
         onCheckedChange = onCheckedChange,
+        onDisabledChange = onDisabledChange,
         modifier = Modifier.animateItem(),
     )
 

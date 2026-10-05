@@ -74,6 +74,7 @@ fun MainRoute(
     MainScreen(
         uiState = uiState,
         onToggleTodo = viewModel::onTodoToggle,
+        onToggleTodoDisabled = viewModel::onTodoDisabledToggle,
         onConfirmParentCompletion = viewModel::confirmParentCompletion,
         onDismissParentCompletion = viewModel::dismissParentCompletion,
         onAddClick = viewModel::showAddSheet,
@@ -91,6 +92,7 @@ fun MainRoute(
 fun MainScreen(
     uiState: MainUiState,
     onToggleTodo: (String) -> Unit,
+    onToggleTodoDisabled: (String) -> Unit,
     onConfirmParentCompletion: () -> Unit,
     onDismissParentCompletion: () -> Unit,
     onAddClick: () -> Unit,
@@ -125,6 +127,7 @@ fun MainScreen(
     }
 
     val todayTree = uiState.todayData?.tree.orEmpty()
+    val disabledTree = uiState.todayData?.disabledTree.orEmpty()
     val incompleteNodes = todayTree.filter { !it.todo.completed }
     val completedNodes = todayTree.filter { it.todo.completed }
 
@@ -171,7 +174,7 @@ fun MainScreen(
                 item {
                     EmptyTodayCard()
                 }
-            } else {
+            } else if (todayTree.isNotEmpty()) {
                 item {
                     SectionHeader(
                         title = stringResource(id = R.string.today_incomplete_section_title),
@@ -189,6 +192,7 @@ fun MainScreen(
                         onExpandToggle = ::onExpandToggle,
                         onTodoClick = onEditTodo,
                         onCheckedChange = onToggleTodo,
+                        onDisabledChange = onToggleTodoDisabled,
                     )
                 }
 
@@ -209,8 +213,26 @@ fun MainScreen(
                         onExpandToggle = ::onExpandToggle,
                         onTodoClick = onEditTodo,
                         onCheckedChange = onToggleTodo,
+                        onDisabledChange = onToggleTodoDisabled,
                     )
                 }
+            }
+
+            if (disabledTree.isNotEmpty()) {
+                item {
+                    SectionHeader(
+                        title = stringResource(id = R.string.today_disabled_section_title),
+                        count = disabledTree.size,
+                    )
+                }
+                TodoList(
+                    nodes = disabledTree,
+                    isExpanded = ::isExpanded,
+                    onExpandToggle = ::onExpandToggle,
+                    onTodoClick = onEditTodo,
+                    onCheckedChange = onToggleTodo,
+                    onDisabledChange = onToggleTodoDisabled,
+                )
             }
         }
     }

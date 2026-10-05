@@ -5,6 +5,7 @@
     <string name="today_task_section_title">任务</string>
     <string name="today_incomplete_section_title">未完成</string>
     <string name="today_completed_section_title">已完成</string>
+    <string name="today_disabled_section_title">已停用</string>
     <string name="today_section_count">%1$d 个</string>
     <string name="today_no_incomplete">暂无未完成任务</string>
     <string name="today_no_completed">暂无已完成任务</string>
@@ -17,6 +18,9 @@
     <string name="todo_collapse_action">收起子任务</string>
     <string name="todo_mark_complete_action">标记为已完成</string>
     <string name="todo_mark_incomplete_action">标记为未完成</string>
+    <string name="todo_enable_action">启用任务</string>
+    <string name="todo_disable_action">停用任务</string>
+    <string name="todo_disabled_badge">已停用</string>
     <string name="todo_repeat_weekdays_badge">周内重复</string>
     <string name="todo_repeat_monthly_badge">月内重复</string>
     <string name="parent_completion_dialog_title">确认完成</string>
@@ -56,6 +60,7 @@
     <string name="export_json">导出 JSON</string>
     <string name="export_location_unset">导出位置：未配置</string>
     <string name="export_location_set">导出位置：%1$s</string>
+    <string name="export_location_unavailable">导出位置（暂时无法解析）</string>
     <string name="export_select_location_success">已设置导出位置：%1$s</string>
     <string name="export_select_location_failed">导出位置授权失败</string>
     <string name="export_missing_location">请先配置导出位置</string>

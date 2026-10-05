@@ -3,6 +3,7 @@ package com.lighttodo.android.ui
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -161,6 +162,12 @@ class MainViewModel @Inject constructor(
         }
     }
 
+    fun onTodoDisabledToggle(todoId: String) {
+        viewModelScope.launch {
+            todoRepository.toggleTodoDisabled(todoId)
+        }
+    }
+
     fun confirmParentCompletion() {
         val request = pendingParentCompletion.value ?: return
         viewModelScope.launch {
@@ -243,8 +250,20 @@ class MainViewModel @Inject constructor(
         exportMessage.value = null
     }
 
-    private fun exportDirectoryLabel(uriString: String): String =
-        DocumentFile.fromTreeUri(context, Uri.parse(uriString))?.name ?: uriString
+    private fun exportDirectoryLabel(uriString: String): String {
+        val uri = runCatching { Uri.parse(uriString) }.getOrNull()
+            ?: return context.getString(R.string.export_location_unavailable)
+        val documentName = runCatching {
+            DocumentFile.fromTreeUri(context, uri)?.name
+        }.getOrNull()
+        val documentId = runCatching {
+            DocumentsContract.getTreeDocumentId(uri)
+        }.getOrNull()
+
+        return formatDocumentTreeId(documentId?.let { Uri.decode(it) })
+            ?: documentName?.takeIf { it.isNotBlank() }
+            ?: context.getString(R.string.export_location_unavailable)
+    }
 
     private suspend fun writeExportFile(directoryUriString: String): String {
         val directoryUri = Uri.parse(directoryUriString)
@@ -328,7 +347,7 @@ private fun TodayTodoData.toUiState(
         editingTodo = editingTodo,
         exportDirectoryLabel = exportDirectoryLabel,
         exportMessage = exportMessage,
-        isEmpty = totalCount == 0,
+        isEmpty = tree.isEmpty() && disabledTree.isEmpty(),
     )
 
 private const val EXPORT_PREFS_NAME = "lighttodo_export"

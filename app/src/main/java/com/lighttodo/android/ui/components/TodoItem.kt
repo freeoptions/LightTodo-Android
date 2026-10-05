@@ -18,11 +18,14 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -41,6 +44,7 @@ fun TodoItem(
     onExpandToggle: (String) -> Unit,
     onClick: (String) -> Unit,
     onCheckedChange: (String) -> Unit,
+    onDisabledChange: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val todo = node.todo
@@ -50,12 +54,16 @@ fun TodoItem(
     val isMonthlyRepeat = repeatMode == RepeatMode.MONTHLY
     val weekdaysBadge = stringResource(id = R.string.todo_repeat_weekdays_badge)
     val monthlyBadge = stringResource(id = R.string.todo_repeat_monthly_badge)
+    val disabledBadge = stringResource(id = R.string.todo_disabled_badge)
+    val disabledActionDescription = stringResource(
+        id = if (todo.disabled) R.string.todo_enable_action else R.string.todo_disable_action,
+    )
     val expandHint = if (expanded) {
         stringResource(id = R.string.todo_collapse_hint)
     } else {
         stringResource(id = R.string.todo_expand_hint)
     }
-    val titleColor = if (todo.completed) {
+    val titleColor = if (todo.completed || todo.disabled) {
         MaterialTheme.colorScheme.onSurfaceVariant
     } else {
         MaterialTheme.colorScheme.onSurface
@@ -105,7 +113,7 @@ fun TodoItem(
                     color = titleColor,
                     textDecoration = if (todo.completed) TextDecoration.LineThrough else null,
                 )
-                if (hasChildren || isWeekdaysRepeat || isMonthlyRepeat) {
+                if (hasChildren || isWeekdaysRepeat || isMonthlyRepeat || todo.disabled) {
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -132,6 +140,17 @@ fun TodoItem(
                                 color = MaterialTheme.colorScheme.onPrimaryContainer,
                             )
                         }
+                        if (todo.disabled) {
+                            Text(
+                                text = disabledBadge,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                                    .padding(horizontal = 8.dp, vertical = 3.dp),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                         if (hasChildren) {
                             Text(
                                 text = expandHint,
@@ -143,9 +162,28 @@ fun TodoItem(
                 }
             }
 
+            Switch(
+                checked = !todo.disabled,
+                onCheckedChange = { onDisabledChange(todo.id) },
+                modifier = Modifier
+                    .scale(0.8f)
+                    .semantics {
+                        contentDescription = disabledActionDescription
+                    },
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
+                    checkedTrackColor = MaterialTheme.colorScheme.primary,
+                    checkedBorderColor = MaterialTheme.colorScheme.primary,
+                    uncheckedThumbColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant,
+                    uncheckedBorderColor = MaterialTheme.colorScheme.outline,
+                ),
+            )
+
             TodoCheckBox(
                 checked = todo.completed,
                 onClick = { onCheckedChange(todo.id) },
+                enabled = !todo.disabled,
             )
         }
     }
@@ -155,6 +193,7 @@ fun TodoItem(
 private fun TodoCheckBox(
     checked: Boolean,
     onClick: () -> Unit,
+    enabled: Boolean,
 ) {
     val checkedActionDescription = if (checked) {
         stringResource(id = R.string.todo_mark_incomplete_action)
@@ -165,6 +204,7 @@ private fun TodoCheckBox(
     Checkbox(
         checked = checked,
         onCheckedChange = { onClick() },
+        enabled = enabled,
         modifier = Modifier
             .size(44.dp)
             .semantics {
